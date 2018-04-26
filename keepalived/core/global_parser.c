@@ -117,6 +117,9 @@ email_handler(vector_t *strvec)
 	unsigned int i;
 	char *str;
 
+	if (!email_vec)
+		return;
+
 	for (i = 0; i < vector_size(email_vec); i++) {
 		str = vector_slot(email_vec, i);
 		alloc_email(str);
