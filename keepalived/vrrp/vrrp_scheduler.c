@@ -85,10 +85,10 @@ thread_t *garp_thread;
  *     |               |<----------------------|               |
  *     +---------------+                       +---------------+
  */
-static void vrrp_backup(vrrp_t *, char *, ssize_t);
-static void vrrp_leave_master(vrrp_t *, char *, ssize_t);
-static void vrrp_leave_fault(vrrp_t *, char *, ssize_t);
-static void vrrp_become_master(vrrp_t *, char *, ssize_t);
+static void vrrp_backup(vrrp_if *, char *, ssize_t);
+static void vrrp_leave_master(vrrp_if *, char *, ssize_t);
+static void vrrp_leave_fault(vrrp_if *, char *, ssize_t);
+static void vrrp_become_master(vrrp_if *, char *, ssize_t);
 
 static void vrrp_goto_master(vrrp_t *);
 static void vrrp_master(vrrp_t *);
@@ -101,7 +101,7 @@ static int vrrp_script_thread(thread_t * thread);
 static int vrrp_read_dispatcher_thread(thread_t *);
 
 static struct {
-	void (*read) (vrrp_t *, char *, ssize_t);
+	void (*read) (vrrp_if *, char *, ssize_t);
 	void (*read_timeout) (vrrp_t *);
 } VRRP_FSM[VRRP_MAX_FSM_STATE + 1] =
 {
@@ -180,18 +180,30 @@ vrrp_smtp_notifier(vrrp_t * vrrp)
 /* Log interface message */
 static void vrrp_log_int_down(vrrp_t *vrrp)
 {
-	if (!IF_ISUP(vrrp->ifp))
-		log_message(LOG_INFO, "Kernel is reporting: interface %s DOWN",
-		       IF_NAME(vrrp->ifp));
+	vrrp_if *vif;
+	element e;
+
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+		if (!IF_ISUP(vif->ifp))
+			log_message(LOG_INFO, "Kernel is reporting: interface %s DOWN",
+			       IF_NAME(vif->ifp));
+	}
 	if (!LIST_ISEMPTY(vrrp->track_ifp))
 		vrrp_log_tracked_down(vrrp->track_ifp);
 }
 
 static void vrrp_log_int_up(vrrp_t *vrrp)
 {
-	if (IF_ISUP(vrrp->ifp))
-		log_message(LOG_INFO, "Kernel is reporting: interface %s UP",
-		       IF_NAME(vrrp->ifp));
+	vrrp_if *vif;
+	element e;
+
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+		if (IF_ISUP(vif->ifp))
+			log_message(LOG_INFO, "Kernel is reporting: interface %s UP",
+			       IF_NAME(vif->ifp));
+	}
 	if (!LIST_ISEMPTY(vrrp->track_ifp))
 		log_message(LOG_INFO, "Kernel is reporting: tracked interface are UP");
 }
@@ -383,6 +395,7 @@ static timeval_t
 vrrp_compute_timer(const int fd)
 {
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	element e;
 	list l = &vrrp_data->vrrp_index_fd[fd%1024 + 1];
 	timeval_t timer;
@@ -393,13 +406,14 @@ vrrp_compute_timer(const int fd)
 	 * Test and return the singleton.
 	 */
 	if (LIST_SIZE(l) == 1) {
-		vrrp = ELEMENT_DATA(LIST_HEAD(l));
-			return vrrp->sands;
+		vif = ELEMENT_DATA(LIST_HEAD(l));
+			return vif->vrrp->sands;
 	}
 
 	/* Multiple instances on the same interface */
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
-		vrrp = ELEMENT_DATA(e);
+		vif = ELEMENT_DATA(e);
+		vrrp = vif->vrrp;
 		if (timer_cmp(vrrp->sands, timer) < 0 ||
 		    timer_isnull(timer))
 			timer = timer_dup(vrrp->sands);
@@ -427,6 +441,7 @@ static int
 vrrp_timer_vrid_timeout(const int fd)
 {
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	element e;
 	list l = &vrrp_data->vrrp_index_fd[fd%1024 + 1];
 	timeval_t timer;
@@ -435,7 +450,8 @@ vrrp_timer_vrid_timeout(const int fd)
 	/* Multiple instances on the same interface */
 	timer_reset(timer);
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
-		vrrp = ELEMENT_DATA(e);
+		vif = ELEMENT_DATA(e);
+		vrrp = vif->vrrp;
 		if (timer_cmp(vrrp->sands, timer) < 0 ||
 		    timer_isnull(timer)) {
 			timer = timer_dup(vrrp->sands);
@@ -520,30 +536,36 @@ static void
 vrrp_create_sockpool(list l)
 {
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	list p = vrrp_data->vrrp;
-	element e;
+	element e_vrrp;
+	element e_vif;
 	ifindex_t ifindex;
 	int proto;
 	bool unicast;
 
-	for (e = LIST_HEAD(p); e; ELEMENT_NEXT(e)) {
-		vrrp = ELEMENT_DATA(e);
-		ifindex =
-#ifdef _HAVE_VRRP_VMAC_
-			  (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vrrp->ifp) :
-#endif
-										    IF_INDEX(vrrp->ifp);
-		unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
-#if defined _WITH_VRRP_AUTH_
-		if (vrrp->version == VRRP_VERSION_2 && vrrp->auth_type == VRRP_AUTH_AH)
-			proto = IPPROTO_IPSEC_AH;
-		else
-#endif
-			proto = IPPROTO_VRRP;
+	for (e_vrrp = LIST_HEAD(p); e_vrrp; ELEMENT_NEXT(e_vrrp)) {
+		vrrp = ELEMENT_DATA(e_vrrp);
+		for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vif = ELEMENT_DATA(e_vif);
 
-		/* add the vrrp element if not exist */
-		if (!already_exist_sock(l, vrrp->family, proto, ifindex, unicast))
-			alloc_sock(vrrp->family, l, proto, ifindex, unicast);
+			ifindex =
+#ifdef _HAVE_VRRP_VMAC_
+				  (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vif->ifp) :
+#endif
+											    IF_INDEX(vif->ifp);
+			unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
+#if defined _WITH_VRRP_AUTH_
+			if (vrrp->version == VRRP_VERSION_2 && vrrp->auth_type == VRRP_AUTH_AH)
+				proto = IPPROTO_IPSEC_AH;
+			else
+#endif
+				proto = IPPROTO_VRRP;
+
+			/* add the vrrp element if not exist */
+			if (!already_exist_sock(l, vrrp->family, proto, ifindex, unicast))
+				alloc_sock(vrrp->family, l, proto, ifindex, unicast);
+		}
 	}
 }
 
@@ -570,9 +592,11 @@ vrrp_set_fds(list l)
 {
 	sock_t *sock;
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	list p = vrrp_data->vrrp;
 	element e_sock;
 	element e_vrrp;
+	element e_vif;
 	int proto;
 	ifindex_t ifindex;
 	bool unicast;
@@ -581,29 +605,32 @@ vrrp_set_fds(list l)
 		sock = ELEMENT_DATA(e_sock);
 		for (e_vrrp = LIST_HEAD(p); e_vrrp; ELEMENT_NEXT(e_vrrp)) {
 			vrrp = ELEMENT_DATA(e_vrrp);
-			ifindex =
+			for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+				vif = ELEMENT_DATA(e_vif);
+				ifindex =
 #ifdef _HAVE_VRRP_VMAC_
-				  (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vrrp->ifp) :
+					  (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vif->ifp) :
 #endif
-											    IF_INDEX(vrrp->ifp);
-			unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
+												    IF_INDEX(vif->ifp);
+				unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
 #if defined _WITH_VRRP_AUTH_
-			if (vrrp->version == VRRP_VERSION_2 && vrrp->auth_type == VRRP_AUTH_AH)
-				proto = IPPROTO_IPSEC_AH;
-			else
+				if (vrrp->version == VRRP_VERSION_2 && vrrp->auth_type == VRRP_AUTH_AH)
+					proto = IPPROTO_IPSEC_AH;
+				else
 #endif
-				proto = IPPROTO_VRRP;
+					proto = IPPROTO_VRRP;
 
-			if ((sock->ifindex == ifindex)	&&
-			    (sock->family == vrrp->family) &&
-			    (sock->proto == proto)	&&
-			    (sock->unicast == unicast)) {
-				vrrp->fd_in = sock->fd_in;
-				vrrp->fd_out = sock->fd_out;
+				if ((sock->ifindex == ifindex)	&&
+				    (sock->family == vrrp->family) &&
+				    (sock->proto == proto)	&&
+				    (sock->unicast == unicast)) {
+					vif->fd_in = sock->fd_in;
+					vif->fd_out = sock->fd_out;
 
-				/* append to hash index */
-				alloc_vrrp_fd_bucket(vrrp);
-				alloc_vrrp_bucket(vrrp);
+					/* append to hash index */
+					alloc_vrrp_fd_bucket(vif);
+					alloc_vrrp_bucket(vif);
+				}
 			}
 		}
 	}
@@ -651,8 +678,9 @@ vrrp_dispatcher_release(vrrp_data_t *data)
 }
 
 static void
-vrrp_backup(vrrp_t * vrrp, char *buffer, ssize_t len)
+vrrp_backup(vrrp_if *vif, char *buffer, ssize_t len)
 {
+	vrrp_t *vrrp = vif->vrrp;
 #ifdef _WITH_VRRP_AUTH_
 	struct iphdr *iph;
 	ipsec_ah_t *ah;
@@ -667,7 +695,6 @@ vrrp_backup(vrrp_t * vrrp, char *buffer, ssize_t len)
 		}
 	}
 #endif
-
 	if (!VRRP_ISUP(vrrp)) {
 		vrrp_log_int_down(vrrp);
 		log_message(LOG_INFO, "VRRP_Instance(%s) Now in FAULT state",
@@ -680,17 +707,18 @@ vrrp_backup(vrrp_t * vrrp, char *buffer, ssize_t len)
 #endif
 		}
 	} else {
-		vrrp_state_backup(vrrp, buffer, len);
+		vrrp_state_backup(vif, buffer, len);
 	}
 }
 
 static void
-vrrp_become_master(vrrp_t * vrrp,
+vrrp_become_master(vrrp_if *vif,
 #ifndef _WITH_VRRP_AUTH_
 				 __attribute__((unused))
 #endif
 							 char *buffer, __attribute__((unused)) ssize_t len)
 {
+	vrrp_t *vrrp = vif->vrrp;
 #ifdef _WITH_VRRP_AUTH_
 	struct iphdr *iph;
 	ipsec_ah_t *ah;
@@ -718,13 +746,15 @@ vrrp_become_master(vrrp_t * vrrp,
 }
 
 static void
-vrrp_leave_master(vrrp_t * vrrp, char *buffer, ssize_t len)
+vrrp_leave_master(vrrp_if *vif, char *buffer, ssize_t len)
 {
+	vrrp_t *vrrp = vif->vrrp;
+
 	if (!VRRP_ISUP(vrrp)) {
 		vrrp_log_int_down(vrrp);
 		vrrp->wantstate = VRRP_STATE_GOTO_FAULT;
 		vrrp_state_leave_master(vrrp);
-	} else if (vrrp_state_master_rx(vrrp, buffer, len)) {
+	} else if (vrrp_state_master_rx(vif, buffer, len)) {
 		vrrp_state_leave_master(vrrp);
 		vrrp_smtp_notifier(vrrp);
 	}
@@ -746,17 +776,19 @@ vrrp_ah_sync(vrrp_t *vrrp)
 #endif
 
 static void
-vrrp_leave_fault(vrrp_t * vrrp, char *buffer, ssize_t len)
+vrrp_leave_fault(vrrp_if * vif, char *buffer, ssize_t len)
 {
+	vrrp_t *vrrp = vif->vrrp;
+
 	if (!VRRP_ISUP(vrrp))
 		return;
 
-	if (vrrp_state_fault_rx(vrrp, buffer, len) == VRRP_STATE_MAST) {
+	if (vrrp_state_fault_rx(vif, buffer, len) == VRRP_STATE_MAST) {
 		if (!vrrp->sync || vrrp_sync_leave_fault(vrrp)) {
 			log_message(LOG_INFO,
 			       "VRRP_Instance(%s) prio is higher than received advert",
 			       vrrp->iname);
-			vrrp_become_master(vrrp, buffer, len);
+			vrrp_become_master(vif, buffer, len);
 #ifdef _WITH_SNMP_RFC_
 #ifdef _WITH_SNMP_RFCV3_
 			vrrp->stats->master_reason = VRRPV3_MASTER_REASON_PREEMPTED;
@@ -785,6 +817,19 @@ vrrp_leave_fault(vrrp_t * vrrp, char *buffer, ssize_t len)
 static void
 vrrp_goto_master(vrrp_t * vrrp)
 {
+	timeval_t delta;
+
+	/* Check last received advertisement time */
+	if (vrrp->last_adver_rx.tv_sec > 0) {
+		delta = timer_sub(time_now, vrrp->last_adver_rx);
+		log_message(LOG_INFO, "Last advertisement time %lu.%06lu",
+				delta.tv_sec, delta.tv_usec);
+		if (timer_tol(delta) < (3 * vrrp->adver_int)) {
+			log_message(LOG_INFO, "  continue");
+			return;
+		}
+	}
+
 	if (!VRRP_ISUP(vrrp)) {
 		vrrp_log_int_down(vrrp);
 		log_message(LOG_INFO, "VRRP_Instance(%s) Now in FAULT state",
@@ -814,6 +859,7 @@ vrrp_goto_master(vrrp_t * vrrp)
 	    (vrrp->version == VRRP_VERSION_3 && vrrp->ms_down_timer >= 3 * vrrp->master_adver_int))
 		vrrp->stats->master_reason = VRRPV3_MASTER_REASON_MASTER_NO_RESPONSE;
 #endif
+
 	/* handle master state transition */
 	vrrp->wantstate = VRRP_STATE_MAST;
 	vrrp_state_goto_master(vrrp);
@@ -997,24 +1043,37 @@ static int
 vrrp_dispatcher_read_timeout(int fd)
 {
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	int vrid = 0;
 	int prev_state = 0;
 
 	/* Searching for matching instance */
 	vrid = vrrp_timer_vrid_timeout(fd);
-	vrrp = vrrp_index_lookup(vrid, fd);
+	vif  = vrrp_index_lookup(vrid, fd);
+	if (!vif)
+		return -1;
 
-	/* Run the FSM handler */
-	prev_state = vrrp->state;
-	VRRP_FSM_READ_TO(vrrp);
+	vrrp = vif->vrrp;
 
-	/* handle instance synchronization */
-//	printf("Send [%s] TSM transtition : [%d,%d] Wantstate = [%d]\n"
-//	       , vrrp->iname
-//	       , prev_state
-//	       , vrrp->state
-//	       , vrrp->wantstate);
-	VRRP_TSM_HANDLE(prev_state, vrrp);
+	if (vif == ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if)))
+	{
+		/* Only once per VRRP, i.e. for the first I/F.
+		 * This works fine, as we only want to act on missing 
+		 * advertisements completely (all interfaces)
+		 */
+
+		/* Run the FSM handler */
+		prev_state = vrrp->state;
+		VRRP_FSM_READ_TO(vrrp);
+
+		/* handle instance synchronization */
+	//	printf("Send [%s] TSM transtition : [%d,%d] Wantstate = [%d]\n"
+	//	       , vrrp->iname
+	//	       , prev_state
+	//	       , vrrp->state
+	//	       , vrrp->wantstate);
+		VRRP_TSM_HANDLE(prev_state, vrrp);
+	}
 
 	/*
 	 * We are sure the instance exist. So we can
@@ -1032,7 +1091,7 @@ vrrp_dispatcher_read_timeout(int fd)
 		vrrp->quick_sync = 0;
 	}
 
-	return vrrp->fd_in;
+	return vif->fd_in;
 }
 
 /* Handle dispatcher read packet */
@@ -1040,6 +1099,7 @@ static int
 vrrp_dispatcher_read(sock_t * sock)
 {
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 	vrrphdr_t *hd;
 	ssize_t len = 0;
 	int prev_state = 0;
@@ -1056,17 +1116,22 @@ vrrp_dispatcher_read(sock_t * sock)
 	hd = vrrp_get_header(sock->family, vrrp_buffer, &proto);
 
 	/* Searching for matching instance */
-	vrrp = vrrp_index_lookup(hd->vrid, sock->fd_in);
+	vif = vrrp_index_lookup(hd->vrid, sock->fd_in);
 
 	/* If no instance found => ignore the advert */
-	if (!vrrp)
+	if (!vif) {
 		return sock->fd_in;
+	}
 
-	vrrp->pkt_saddr = src_addr;
+	vif->pkt_saddr = src_addr;
+	vrrp = vif->vrrp;
 
 	/* Run the FSM handler */
+log_message(LOG_INFO, "Received VRRP on %s (%d/%d) in state %s",
+		vif->ifp->ifname, hd->vrid, hd->priority,
+		vrrp->state == VRRP_STATE_MAST ? "Master" : "Backup");
 	prev_state = vrrp->state;
-	VRRP_FSM_READ(vrrp, vrrp_buffer, len);
+	VRRP_FSM_READ(vif, vrrp_buffer, len);
 
 	/* handle instance synchronization */
 //	printf("Read [%s] TSM transtition : [%d,%d] Wantstate = [%d]\n"
@@ -1107,7 +1172,7 @@ vrrp_read_dispatcher_thread(thread_t * thread)
 	if (fd == -1)
 		sock->thread = thread_add_timer(thread->master, vrrp_read_dispatcher_thread,
 						sock, vrrp_timer);
-	else
+	else //if (fd > 0)
 		sock->thread = thread_add_read(thread->master, vrrp_read_dispatcher_thread,
 					       sock, fd, vrrp_timer);
 
@@ -1153,7 +1218,7 @@ vrrp_script_child_thread(thread_t * thread)
 	char *script_exit_type = NULL;
 	bool script_success;
 	char *reason = NULL;
-	int reason_code;
+	int reason_code = 0;
 
 	if (thread->type == THREAD_CHILD_TIMEOUT) {
 		pid = THREAD_CHILD_PID(thread);

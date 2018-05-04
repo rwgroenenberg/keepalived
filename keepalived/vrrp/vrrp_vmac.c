@@ -59,7 +59,7 @@ make_link_local_address(struct in6_addr* l3_addr, const u_char* ll_addr)
 }
 
 static int
-netlink_link_up(vrrp_t *vrrp)
+netlink_link_up(interface_t *ifp)
 {
 	int status = 1;
 	struct {
@@ -74,7 +74,7 @@ netlink_link_up(vrrp_t *vrrp)
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = RTM_NEWLINK;
 	req.ifi.ifi_family = AF_UNSPEC;
-	req.ifi.ifi_index = (int)IF_INDEX(vrrp->ifp);
+	req.ifi.ifi_index = (int)IF_INDEX(ifp);
 	req.ifi.ifi_change |= IFF_UP;
 	req.ifi.ifi_flags |= IFF_UP;
 
@@ -99,8 +99,11 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 		struct ifinfomsg ifi;
 		char buf[256];
 	} req;
+	vrrp_if *vif;
 
-	if (!vrrp->ifp || __test_bit(VRRP_VMAC_UP_BIT, &vrrp->vmac_flags) || !vrrp->vrid)
+	/* First interface */
+	vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+	if (!vif->ifp || __test_bit(VRRP_VMAC_UP_BIT, &vrrp->vmac_flags) || !vrrp->vrid)
 		return -1;
 
 	if (vrrp->family == AF_INET6)
@@ -121,7 +124,7 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 	if ((ifp = if_get_by_ifname(ifname))) {
 		/* Check to see whether this interface has wrong mac ? */
 		if ((memcmp((const void *) ifp->hw_addr, (const void *) ll_addr, ETH_ALEN) != 0 ||
-		     ifp->base_ifindex != vrrp->ifp->ifindex)) {
+		     ifp->base_ifindex != vif->ifp->ifindex)) {
 
 			/* Be safe here - we don't want to remove a physical interface */
 			if (ifp->vmac) {
@@ -174,7 +177,7 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 		addattr32(&req.n, sizeof(req), IFLA_MACVLAN_MODE, MACVLAN_MODE_PRIVATE);
 		data->rta_len = (unsigned short)((void *)NLMSG_TAIL(&req.n) - (void *)data);
 		linkinfo->rta_len = (unsigned short)((void *)NLMSG_TAIL(&req.n) - (void *)linkinfo);
-		addattr_l(&req.n, sizeof(req), IFLA_LINK, &IF_INDEX(vrrp->ifp), sizeof(uint32_t));
+		addattr_l(&req.n, sizeof(req), IFLA_LINK, &IF_INDEX(vif->ifp), sizeof(uint32_t));
 		addattr_l(&req.n, sizeof(req), IFLA_IFNAME, ifname, strlen(ifname));
 		addattr_l(&req.n, sizeof(req), IFLA_ADDRESS, ll_addr, ETH_ALEN);
 
@@ -196,13 +199,13 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 			return -1;
 	}
 
-	base_ifp = vrrp->ifp;
-	base_ifindex = vrrp->ifp->ifindex;
-	ifp->flags = vrrp->ifp->flags; /* Copy base interface flags */
-	vrrp->ifp = ifp;
-	vrrp->ifp->base_ifindex = base_ifindex;
-	vrrp->ifp->vmac = true;
-	vrrp->vmac_ifindex = IF_INDEX(vrrp->ifp); /* For use on delete */
+	base_ifp = vif->ifp;
+	base_ifindex = vif->ifp->ifindex;
+	ifp->flags = vif->ifp->flags; /* Copy base interface flags */
+	vif->ifp = ifp;
+	vif->ifp->base_ifindex = base_ifindex;
+	vif->ifp->vmac = true;
+	vrrp->vmac_ifindex = IF_INDEX(vif->ifp); /* For use on delete */
 
 	if (vrrp->family == AF_INET) {
 		/* Set the necessary kernel parameters to make macvlans work for us */
@@ -257,8 +260,8 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 			memset(&ipaddress, 0, sizeof(ipaddress));
 
 			ipaddress.ifp = ifp;
-			if (vrrp->saddr.ss_family == AF_INET6)
-				ipaddress.u.sin6_addr = ((struct sockaddr_in6*)&vrrp->saddr)->sin6_addr;
+			if (vif->saddr.ss_family == AF_INET6)
+				ipaddress.u.sin6_addr = ((struct sockaddr_in6*)&vif->saddr)->sin6_addr;
 			else if (base_ifp->sin6_addr.s6_addr32[0])
 				ipaddress.u.sin6_addr = base_ifp->sin6_addr;
 			else
@@ -271,15 +274,15 @@ netlink_link_add_vmac(vrrp_t *vrrp)
 				log_message(LOG_INFO, "Adding link-local address to vmac failed");
 
 			/* Save the address as source for vrrp packets */
-			if (vrrp->saddr.ss_family == AF_UNSPEC)
-				inet_ip6tosockaddr(&ipaddress.u.sin6_addr, &vrrp->saddr);
-			inet_ip6scopeid(vrrp->vmac_ifindex, &vrrp->saddr);
+			if (vif->saddr.ss_family == AF_UNSPEC)
+				inet_ip6tosockaddr(&ipaddress.u.sin6_addr, &vif->saddr);
+			inet_ip6scopeid(vrrp->vmac_ifindex, &vif->saddr);
 		}
 	}
 
 	/* bring it UP ! */
 	__set_bit(VRRP_VMAC_UP_BIT, &vrrp->vmac_flags);
-	netlink_link_up(vrrp);
+	netlink_link_up(vif->ifp);
 
 #if !HAVE_DECL_IFLA_INET6_ADDR_GEN_MODE
 	if (vrrp->family == AF_INET6 || vrrp->evip_add_ipv6) {
@@ -323,13 +326,16 @@ netlink_link_del_vmac(vrrp_t *vrrp)
 		struct ifinfomsg ifi;
 		char buf[256];
 	} req;
+	vrrp_if *vif;
 
-	if (!vrrp->ifp)
+	/* First interface */
+	vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+	if (!vif->ifp)
 		return -1;
 
 	/* Reset arp_ignore and arp_filter on the base interface if necessary */
 	if (vrrp->family == AF_INET) {
-		base_ifp = if_get_by_ifindex(vrrp->ifp->base_ifindex);
+		base_ifp = if_get_by_ifindex(vif->ifp->base_ifindex);
 
 		if (base_ifp)
 			reset_interface_parameters(base_ifp);

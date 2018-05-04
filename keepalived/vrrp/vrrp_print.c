@@ -196,6 +196,8 @@ static void
 vrrp_print(FILE *file, void *data)
 {
 	vrrp_t *vrrp = data;
+	vrrp_if *vif;
+	element e;
 #ifdef _WITH_VRRP_AUTH_
 	char auth_data[sizeof(vrrp->auth_data) + 1];
 #endif
@@ -207,9 +209,10 @@ vrrp_print(FILE *file, void *data)
 		fprintf(file, "   Using Native IPv6\n");
 	fprintf(file, "   State = ");
 	if (vrrp->state == VRRP_STATE_BACK) {
+		vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
 		fprintf(file, "BACKUP\n");
 		fprintf(file, "   Master router = %s\n",
-			inet_sockaddrtos(&vrrp->master_saddr));
+			inet_sockaddrtos(&vif->master_saddr));
 		fprintf(file, "   Master priority = %d\n",
 			vrrp->master_priority);
 	}
@@ -223,18 +226,21 @@ vrrp_print(FILE *file, void *data)
 	time_str[sizeof(time_str)-2] = '\0';	/* Remove '\n' char */
 	fprintf(file, "   Last transition = %ld (%s)\n",
 		vrrp->last_transition.tv_sec, time_str);
-	fprintf(file, "   Listening device = %s\n", IF_NAME(vrrp->ifp));
-#ifdef _HAVE_VRRP_VMAC_
-	if (vrrp->ifp->vmac)
-		fprintf(file, "   Real interface = %s\n", IF_NAME(if_get_by_ifindex(vrrp->ifp->base_ifindex)));
-#endif
-	if (vrrp->dont_track_primary)
-		fprintf(file, "   VRRP interface tracking disabled\n");
-	if (vrrp->skip_check_adv_addr)
-		fprintf(file, "   Skip checking advert IP addresses\n");
-	if (vrrp->strict_mode)
-		fprintf(file, "   Enforcing VRRP compliance\n");
-	fprintf(file, "   Using src_ip = %s\n", inet_sockaddrtos(&vrrp->saddr));
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+		fprintf(file, "   Listening device = %s\n", IF_NAME(vif->ifp));
+	#ifdef _HAVE_VRRP_VMAC_
+		if (vif->ifp->vmac)
+			fprintf(file, "   Real interface = %s\n", IF_NAME(if_get_by_ifindex(vif->ifp->base_ifindex)));
+	#endif
+		if (vrrp->dont_track_primary)
+			fprintf(file, "   VRRP interface tracking disabled\n");
+		if (vrrp->skip_check_adv_addr)
+			fprintf(file, "   Skip checking advert IP addresses\n");
+		if (vrrp->strict_mode)
+			fprintf(file, "   Enforcing VRRP compliance\n");
+		fprintf(file, "   Using src_ip = %s\n", inet_sockaddrtos(&vif->saddr));
+	}
 	fprintf(file, "   Gratuitous ARP delay = %d\n",
 		       vrrp->garp_delay/TIMER_HZ);
 	fprintf(file, "   Gratuitous ARP repeat = %d\n", vrrp->garp_rep);

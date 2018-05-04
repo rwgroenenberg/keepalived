@@ -37,15 +37,16 @@ get_vrrp_hash(const int vrid, const int fd)
 }
 
 void
-alloc_vrrp_bucket(vrrp_t *vrrp)
+alloc_vrrp_bucket(vrrp_if *vif)
 {
-	list_add(&vrrp_data->vrrp_index[get_vrrp_hash(vrrp->vrid, vrrp->fd_in)], vrrp);
+	vrrp_t *vrrp = vif->vrrp;
+	list_add(&vrrp_data->vrrp_index[get_vrrp_hash(vrrp->vrid, vif->fd_in)], vif);
 }
 
-vrrp_t *
+vrrp_if *
 vrrp_index_lookup(const int vrid, const int fd)
 {
-	vrrp_t *vrrp;
+	vrrp_if *vif;
 	element e;
 	list l = &vrrp_data->vrrp_index[get_vrrp_hash(vrid, fd)];
 
@@ -58,8 +59,8 @@ vrrp_index_lookup(const int vrid, const int fd)
 	 * Test and return the singleton.
 	 */
 	if (LIST_SIZE(l) == 1) {
-		vrrp = ELEMENT_DATA(LIST_HEAD(l));
-		return ((vrrp->fd_in == fd) && (vrrp->vrid == vrid)) ? vrrp : NULL;
+		vif = ELEMENT_DATA(LIST_HEAD(l));
+		return ((vif->fd_in == fd) && (vif->vrrp->vrid == vrid)) ? vif : NULL;
 	}
 
 	/*
@@ -68,9 +69,9 @@ vrrp_index_lookup(const int vrid, const int fd)
 	 * a fd lookup as collisions solver.
 	 */
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
-		vrrp =  ELEMENT_DATA(e);
-		if ((vrrp->fd_in == fd) && (vrrp->vrid == vrid))
-			return vrrp;
+		vif = ELEMENT_DATA(e);
+		if ((vif->fd_in == fd) && (vif->vrrp->vrid == vrid))
+			return vif;
 	}
 
 	/* No match */
@@ -79,31 +80,33 @@ vrrp_index_lookup(const int vrid, const int fd)
 
 /* FD hash table */
 void
-alloc_vrrp_fd_bucket(vrrp_t *vrrp)
+alloc_vrrp_fd_bucket(vrrp_if *vif)
 {
 	/* We use a mod key plus 1 */
-	list_add(&vrrp_data->vrrp_index_fd[vrrp->fd_in%1024 + 1], vrrp);
+	list_add(&vrrp_data->vrrp_index_fd[vif->fd_in%1024 + 1], vif);
 }
 
 void
-remove_vrrp_fd_bucket(vrrp_t *vrrp)
+remove_vrrp_fd_bucket(vrrp_if *vif)
 {
-	list l = &vrrp_data->vrrp_index_fd[vrrp->fd_in%1024 + 1];
-	list_del(l, vrrp);
+	list l = &vrrp_data->vrrp_index_fd[vif->fd_in%1024 + 1];
+	list_del(l, vif);
 }
 
-void set_vrrp_fd_bucket(int old_fd, vrrp_t *vrrp)
+void set_vrrp_fd_bucket(int old_fd, vrrp_if *vif)
 {
 	vrrp_t *vrrp_ptr;
+	vrrp_if *vif_ptr;
 	element e;
 	element next;
+	element e_vif;
 	list l = &vrrp_data->vrrp_index_fd[old_fd%1024 + 1];
 
 	/* Release old stalled entries */
 	for (e = LIST_HEAD(l); e; e = next) {
 		next = e->next;
-		vrrp_ptr =  ELEMENT_DATA(e);
-		if (vrrp_ptr->fd_in == old_fd) {
+		vif_ptr =  ELEMENT_DATA(e);
+		if (vif_ptr->fd_in == old_fd) {
 			if (e->prev)
 				e->prev->next = e->next;
 			else
@@ -124,12 +127,14 @@ void set_vrrp_fd_bucket(int old_fd, vrrp_t *vrrp)
 	l = vrrp_data->vrrp;
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vrrp_ptr = ELEMENT_DATA(e);
-
-		if (vrrp_ptr->fd_in == old_fd) {
-			/* Update new hash */
-			vrrp_ptr->fd_in = vrrp->fd_in;
-			vrrp_ptr->fd_out = vrrp->fd_out;
-			alloc_vrrp_fd_bucket(vrrp_ptr);
+		for (e_vif = LIST_HEAD(vrrp_ptr->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vif_ptr =  ELEMENT_DATA(e);
+			if (vif_ptr->fd_in == old_fd) {
+				/* Update new hash */
+				vif_ptr->fd_in = vif->fd_in;
+				vif_ptr->fd_out = vif->fd_out;
+				alloc_vrrp_fd_bucket(vif_ptr);
+			}
 		}
 	}
 }

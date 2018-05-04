@@ -54,6 +54,10 @@ vrrp_init_instance_sands(vrrp_t * vrrp)
 		 */
 		vrrp->sands = timer_add_long(time_now, vrrp->ms_down_timer);
 	}
+//log_message(LOG_NOTICE, "vrrp_init_instance_sands %u.%06u (+%u)",
+//		vrrp->sands.tv_sec, vrrp->sands.tv_usec,
+//		((vrrp->sands.tv_sec - time_now.tv_sec) * 1000000) +
+//		 (vrrp->sands.tv_usec - time_now.tv_usec));
 }
 
 /* Instance name lookup */

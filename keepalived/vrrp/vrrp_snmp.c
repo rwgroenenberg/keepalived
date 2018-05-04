@@ -1813,11 +1813,14 @@ vrrp_snmp_instance(struct variable *vp, oid *name, size_t *length,
 		   int exact, size_t *var_len, WriteMethod **write_method)
 {
 	vrrp_t *rt;
+	vrrp_if *vif;
 
 	if ((rt = (vrrp_t *)snmp_header_list_table(vp, name, length, exact,
 						    var_len, write_method,
 						    vrrp_data->vrrp)) == NULL)
 		return NULL;
+
+	vif = ELEMENT_DATA(LIST_HEAD(rt->vrrp_if));
 
 	switch (vp->magic) {
 	case VRRP_SNMP_INSTANCE_NAME:
@@ -1846,8 +1849,8 @@ vrrp_snmp_instance(struct variable *vp, oid *name, size_t *length,
 		long_ret.u = rt->vipset?1:2;
 		return (u_char *)&long_ret;
 	case VRRP_SNMP_INSTANCE_PRIMARYINTERFACE:
-		*var_len = strlen(rt->ifp->ifname);
-		return (u_char *)&rt->ifp->ifname;
+		*var_len = strlen(vif->ifp->ifname);
+		return (u_char *)&vif->ifp->ifname;
 	case VRRP_SNMP_INSTANCE_TRACKPRIMARYIF:
 		long_ret.u = rt->track_ifp?1:2;
 		return (u_char *)&long_ret;
@@ -2848,6 +2851,7 @@ vrrp_rfcv2_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 			int exact, size_t *var_len, WriteMethod **write_method)
 {
 	vrrp_t *rt;
+	vrrp_if *vif;
 	interface_t* ifp;
 	timeval_t uptime;
 
@@ -2855,13 +2859,15 @@ vrrp_rfcv2_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 					     var_len, write_method)) == NULL)
 		return NULL;
 
+	vif = ELEMENT_DATA(LIST_HEAD(rt->vrrp_if));
+
 	switch (vp->magic) {
 	case VRRP_RFC_SNMP_OPER_VRID:
 		long_ret.u = rt->vrid;
 		return (u_char*)&long_ret;
 	case VRRP_RFC_SNMP_OPER_VMAC:
-		*var_len = rt->ifp->hw_addr_len;
-		return (u_char*)&rt->ifp->hw_addr;
+		*var_len = vif->ifp->hw_addr_len;
+		return (u_char*)&vif->ifp->hw_addr;
 	case VRRP_RFC_SNMP_OPER_STATE:
 		long_ret.s = vrrp_snmp_rfc_state(rt->state);
 		return (u_char*)&long_ret;
@@ -2879,15 +2885,15 @@ vrrp_rfcv2_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 			long_ret.u = LIST_SIZE(rt->vip);
 		return (u_char*)&long_ret;
 	case VRRP_RFC_SNMP_OPER_MIP:
-		*var_len = sizeof ((struct sockaddr_in *)&rt->master_saddr)->sin_addr.s_addr;
-		return (u_char*)&((struct sockaddr_in *)&rt->master_saddr)->sin_addr.s_addr;
+		*var_len = sizeof ((struct sockaddr_in *)&vif->master_saddr)->sin_addr.s_addr;
+		return (u_char*)&((struct sockaddr_in *)&vif->master_saddr)->sin_addr.s_addr;
 	case VRRP_RFC_SNMP_OPER_PIP:
 #ifdef _HAVE_VRRP_VMAC_
-		if (rt->ifp->vmac)
-			ifp = if_get_by_ifindex(rt->ifp->base_ifindex);
+		if (vif->ifp->vmac)
+			ifp = if_get_by_ifindex(vif->ifp->base_ifindex);
 		else
 #endif
-			ifp = rt->ifp;
+			ifp = vif->ifp;
 		*var_len = sizeof ifp->sin_addr;
 		return (u_char*)&ifp->sin_addr;
 	case VRRP_RFC_SNMP_OPER_AUTH_TYPE:
@@ -3154,6 +3160,8 @@ static struct variable8 vrrp_rfcv2_vars[] = {
 void
 vrrp_rfcv2_snmp_new_master_trap(vrrp_t *vrrp)
 {
+	vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+
 	/* OID of the notification vrrpTrapNewMaster */
 	oid notification_oid[] = { VRRP_RFC_TRAP_OID, 1 };
 	size_t notification_oid_len = OID_LENGTH(notification_oid);
@@ -3161,7 +3169,7 @@ vrrp_rfcv2_snmp_new_master_trap(vrrp_t *vrrp)
 	oid objid_snmptrap[] = { SNMPTRAP_OID };
 	size_t objid_snmptrap_len = OID_LENGTH(objid_snmptrap);
 	/* OID for trap data vrrpOperMasterIPAddr */
-	oid masterip_oid[] = { VRRP_RFC_OID, 1, 3, 1, 7, IF_BASE_INDEX(vrrp->ifp), vrrp->vrid };
+	oid masterip_oid[] = { VRRP_RFC_OID, 1, 3, 1, 7, IF_BASE_INDEX(vif->ifp), vrrp->vrid };
 	size_t masterip_oid_len = OID_LENGTH(masterip_oid);
 
 	netsnmp_variable_list *notification_vars = NULL;
@@ -3182,8 +3190,8 @@ vrrp_rfcv2_snmp_new_master_trap(vrrp_t *vrrp)
 	snmp_varlist_add_variable(&notification_vars,
 				  masterip_oid, masterip_oid_len,
 				  ASN_IPADDRESS,
-				  (u_char *)&((struct sockaddr_in *)&vrrp->saddr)->sin_addr.s_addr,
-				  sizeof(((struct sockaddr_in *)&vrrp->saddr)->sin_addr.s_addr));
+				  (u_char *)&((struct sockaddr_in *)&vif->saddr)->sin_addr.s_addr,
+				  sizeof(((struct sockaddr_in *)&vif->saddr)->sin_addr.s_addr));
 	log_message(LOG_INFO, "VRRP_Instance(%s): Sending SNMP notification"
 			      " vrrpTrapNewMaster"
 			    , vrrp->iname);
@@ -3194,6 +3202,8 @@ vrrp_rfcv2_snmp_new_master_trap(vrrp_t *vrrp)
 void
 vrrp_rfcv2_snmp_auth_err_trap(vrrp_t *vrrp, struct in_addr src, enum rfcv2_trap_auth_error_type auth_err)
 {
+	vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+
 	/* OID of the notification vrrpTrapNewMaster */
 	oid notification_oid[] = { VRRP_RFC_TRAP_OID, 2 };
 	size_t notification_oid_len = OID_LENGTH(notification_oid);
@@ -3201,10 +3211,10 @@ vrrp_rfcv2_snmp_auth_err_trap(vrrp_t *vrrp, struct in_addr src, enum rfcv2_trap_
 	oid objid_snmptrap[] = { SNMPTRAP_OID };
 	size_t objid_snmptrap_len = OID_LENGTH(objid_snmptrap);
 	/* OID for trap data vrrpTrapPacketSrc */
-	oid packet_src_oid[] = { VRRP_RFC_OID, 1, 5, IF_INDEX(vrrp->ifp), vrrp->vrid };
+	oid packet_src_oid[] = { VRRP_RFC_OID, 1, 5, IF_INDEX(vif->ifp), vrrp->vrid };
 	size_t packet_src_oid_len = OID_LENGTH(packet_src_oid);
 	/* OID for trap data vrrpTrapAuthErrorType */
-	oid err_type_oid[] = { VRRP_RFC_OID, 1, 6, IF_INDEX(vrrp->ifp), vrrp->vrid };
+	oid err_type_oid[] = { VRRP_RFC_OID, 1, 6, IF_INDEX(vif->ifp), vrrp->vrid };
 	size_t err_type_oid_len = OID_LENGTH(err_type_oid);
 
 	netsnmp_variable_list *notification_vars = NULL;
@@ -3523,12 +3533,15 @@ vrrp_rfcv3_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 			int exact, size_t *var_len, WriteMethod **write_method)
 {
 	vrrp_t *rt;
+	vrrp_if *vif;
 	interface_t* ifp;
 	timeval_t uptime, time_now;
 
 	if ((rt = snmp_rfcv3_header_list_table(vp, name, length, exact,
 					     var_len, write_method)) == NULL)
 		return NULL;
+
+	vif = ELEMENT_DATA(LIST_HEAD(rt->vrrp_if));
 
 	switch (vp->magic) {
 	case VRRP_RFCv3_SNMP_OPER_VRID:
@@ -3541,20 +3554,20 @@ vrrp_rfcv3_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 		if (rt->state != VRRP_STATE_MAST) {
 			if (rt->family == AF_INET) {
 				*var_len = sizeof(struct in_addr);
-				return (u_char*)&((struct sockaddr_in *)&rt->master_saddr)->sin_addr;
+				return (u_char*)&((struct sockaddr_in *)&vif->master_saddr)->sin_addr;
 			}
 			*var_len = sizeof(struct in6_addr);
-			return (u_char*)&((struct sockaddr_in6 *)&rt->master_saddr)->sin6_addr;
+			return (u_char*)&((struct sockaddr_in6 *)&vif->master_saddr)->sin6_addr;
 		}
 		/* If we are master, we want to return the Primary IP address */
 		/* Falls through. */
 	case VRRP_RFCv3_SNMP_OPER_PIP:
 #ifdef _HAVE_VRRP_VMAC_
-		if (rt->ifp->vmac)
-			ifp = if_get_by_ifindex(rt->ifp->base_ifindex);
+		if (vif->ifp->vmac)
+			ifp = if_get_by_ifindex(vif->ifp->base_ifindex);
 		else
 #endif
-			ifp = rt->ifp;
+			ifp = vif->ifp;
 		if (rt->family == AF_INET) {
 			*var_len = sizeof(struct in_addr);
 			return (u_char*)&ifp->sin_addr;
@@ -3562,8 +3575,8 @@ vrrp_rfcv3_snmp_opertable(struct variable *vp, oid *name, size_t *length,
 		*var_len = sizeof(struct in6_addr);
 		return (u_char*)&ifp->sin6_addr;
 	case VRRP_RFCv3_SNMP_OPER_VMAC:
-		*var_len = rt->ifp->hw_addr_len;
-		return (u_char*)&rt->ifp->hw_addr;
+		*var_len = vif->ifp->hw_addr_len;
+		return (u_char*)&vif->ifp->hw_addr;
 	case VRRP_RFCv3_SNMP_OPER_STATE:
 		long_ret.s = vrrp_snmp_rfc_state(rt->state);
 		return (u_char*)&long_ret;
@@ -3856,6 +3869,8 @@ static struct variable8 vrrp_rfcv3_vars[] = {
 void
 vrrp_rfcv3_snmp_new_master_notify(vrrp_t *vrrp)
 {
+	vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+
 	/* OID of the notification vrrpTrapNewMaster */
 	oid notification_oid[] = { VRRP_RFCv3_NOTIFY_OID, 1 };
 	size_t notification_oid_len = OID_LENGTH(notification_oid);
@@ -3863,9 +3878,9 @@ vrrp_rfcv3_snmp_new_master_notify(vrrp_t *vrrp)
 	oid objid_snmptrap[] = { SNMPTRAP_OID };
 	size_t objid_snmptrap_len = OID_LENGTH(objid_snmptrap);
 	/* OID for trap data vrrpOperMasterIPAddr */
-	oid masterip_oid[] = { VRRP_RFCv3_OID, 1, 1, 1, 1, 3, IF_BASE_INDEX(vrrp->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
+	oid masterip_oid[] = { VRRP_RFCv3_OID, 1, 1, 1, 1, 3, IF_BASE_INDEX(vif->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
 	size_t masterip_oid_len = OID_LENGTH(masterip_oid);
-	oid master_reason_oid[] = { VRRP_RFCv3_OID, 1, 2, 5, 1, 2, IF_BASE_INDEX(vrrp->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
+	oid master_reason_oid[] = { VRRP_RFCv3_OID, 1, 2, 5, 1, 2, IF_BASE_INDEX(vif->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
 	size_t master_reason_oid_len = OID_LENGTH(master_reason_oid);
 	uint32_t reason = vrrp->stats->master_reason;
 
@@ -3888,14 +3903,14 @@ vrrp_rfcv3_snmp_new_master_notify(vrrp_t *vrrp)
 		snmp_varlist_add_variable(&notification_vars,
 					  masterip_oid, masterip_oid_len,
 					  ASN_OCTET_STR,
-					  (u_char *)&((struct sockaddr_in *)&vrrp->saddr)->sin_addr.s_addr,
-					  sizeof(((struct sockaddr_in *)&vrrp->saddr)->sin_addr.s_addr));
+					  (u_char *)&((struct sockaddr_in *)&vif->saddr)->sin_addr.s_addr,
+					  sizeof(((struct sockaddr_in *)&vif->saddr)->sin_addr.s_addr));
 	else
 		snmp_varlist_add_variable(&notification_vars,
 					  masterip_oid, masterip_oid_len,
 					  ASN_OCTET_STR,
-					  (u_char *)&((struct sockaddr_in6 *)&vrrp->saddr)->sin6_addr,
-					  sizeof(((struct sockaddr_in6 *)&vrrp->saddr)->sin6_addr));
+					  (u_char *)&((struct sockaddr_in6 *)&vif->saddr)->sin6_addr,
+					  sizeof(((struct sockaddr_in6 *)&vif->saddr)->sin6_addr));
 
 	snmp_varlist_add_variable(&notification_vars,
 				  master_reason_oid, master_reason_oid_len,
@@ -3912,6 +3927,8 @@ vrrp_rfcv3_snmp_new_master_notify(vrrp_t *vrrp)
 void
 vrrp_rfcv3_snmp_proto_err_notify(vrrp_t *vrrp)
 {
+	vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+
 	/* OID of the notification vrrpTrapNewMaster */
 	oid notification_oid[] = { VRRP_RFCv3_NOTIFY_OID, 2 };
 	size_t notification_oid_len = OID_LENGTH(notification_oid);
@@ -3919,7 +3936,7 @@ vrrp_rfcv3_snmp_proto_err_notify(vrrp_t *vrrp)
 	oid objid_snmptrap[] = { SNMPTRAP_OID };
 	size_t objid_snmptrap_len = OID_LENGTH(objid_snmptrap);
 	/* OID for notify data vrrpTrapProtoErrorType */
-	oid err_type_oid[] = { VRRP_RFCv3_OID, 1, 2, 5, 1, 6, IF_INDEX(vrrp->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
+	oid err_type_oid[] = { VRRP_RFCv3_OID, 1, 2, 5, 1, 6, IF_INDEX(vif->ifp), vrrp->vrid, vrrp->family == AF_INET ? 1 : 2 };
 	size_t err_type_oid_len = OID_LENGTH(err_type_oid);
 
 	netsnmp_variable_list *notification_vars = NULL;

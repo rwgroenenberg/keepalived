@@ -489,6 +489,11 @@ init_if_queue(void)
 void
 if_add_queue(interface_t * ifp)
 {
+	if (!LIST_EXISTS(if_queue)) {
+		log_message(LOG_ERR, "if_queue does not exist");
+		//return;
+		init_if_queue();
+	}
 	list_add(if_queue, ifp);
 }
 

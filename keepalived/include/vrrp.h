@@ -163,13 +163,24 @@ typedef enum chksum_compatibility {
 } chksum_compatibility_t;
 #endif
 
+/* parameters per interface of virtual router */
+typedef struct _vrrp_if {
+       interface_t             *ifp;                   /* Interface we belong to */
+       struct sockaddr_storage saddr;                  /* Src IP address to use in VRRP IP header */
+       struct sockaddr_storage pkt_saddr;              /* Src IP address received in VRRP IP header */
+       struct sockaddr_storage master_saddr;           /* Store last heard Master address */
+       int                     fd_in;                  /* IN socket descriptor */
+       int                     fd_out;                 /* OUT socket descriptor */
+       struct _vrrp_t          *vrrp;                  /* Parent */
+} vrrp_if;
+
 /* parameters per virtual router -- rfc2338.6.1.2 */
 typedef struct _vrrp_t {
 	sa_family_t		family;			/* AF_INET|AF_INET6 */
 	char			*iname;			/* Instance Name */
 	vrrp_sgroup_t		*sync;			/* Sync group we belong to */
 	vrrp_stats		*stats;			/* Statistics */
-	interface_t		*ifp;			/* Interface we belong to */
+	list			vrrp_if;		/* List of interfaces used for VRRP */
 	bool			dont_track_primary;	/* If set ignores ifp faults */
 	bool			skip_check_adv_addr;	/* If set, don't check the VIPs in subsequent
 							 * adverts from the same master */
@@ -181,15 +192,13 @@ typedef struct _vrrp_t {
 #endif
 	list			track_ifp;		/* Interface state we monitor */
 	list			track_script;		/* Script state we monitor */
-	struct sockaddr_storage	saddr;			/* Src IP address to use in VRRP IP header */
-	struct sockaddr_storage	pkt_saddr;		/* Src IP address received in VRRP IP header */
 	list			unicast_peer;		/* List of Unicast peer to send advert to */
 #ifdef _WITH_UNICAST_CHKSUM_COMPAT_
 	chksum_compatibility_t	unicast_chksum_compat;	/* Whether v1.3.6 and earlier chksum is used */
 #endif
-	struct sockaddr_storage master_saddr;		/* Store last heard Master address */
 	uint8_t			master_priority;	/* Store last heard priority */
 	timeval_t		last_transition;	/* Store transition time */
+	timeval_t		last_adver_rx;		/* Last advert received time */
 	unsigned		garp_delay;		/* Delay to launch gratuitous ARP */
 	timeval_t		garp_refresh;		/* Next scheduled gratuitous ARP refresh */
 	timeval_t		garp_refresh_timer;	/* Next scheduled gratuitous ARP timer */
@@ -234,8 +243,6 @@ typedef struct _vrrp_t {
 	int			init_state;		/* the initial state of the instance */
 #endif
 	int			wantstate;		/* user explicitly wants a state (back/mast) */
-	int			fd_in;			/* IN socket descriptor */
-	int			fd_out;			/* OUT socket descriptor */
 
 	int			debug;			/* Debug level 0-4 */
 
@@ -326,7 +333,7 @@ typedef struct _vrrp_t {
 #define VRRP_PKT_SADDR(V) (((V)->saddr.ss_family) ? ((struct sockaddr_in *) &(V)->saddr)->sin_addr.s_addr : IF_ADDR((V)->ifp))
 #define VRRP_PKT_SADDR6(V) (((V)->saddr.ss_family) ? ((struct sockaddr_in6 *) &(V)->saddr)->sin6_addr : IF_ADDR6((V)->ifp))
 
-#define VRRP_IF_ISUP(V)		((IF_ISUP((V)->ifp) || (V)->dont_track_primary) & \
+#define VRRP_IF_ISUP(V)		(((V)->dont_track_primary || vrrp_ifs_up((V)))  & \
 				((!LIST_ISEMPTY((V)->track_ifp)) ? TRACK_ISUP((V)->track_ifp) : 1))
 
 #define VRRP_SCRIPT_ISUP(V)	((!LIST_ISEMPTY((V)->track_script)) ? SCRIPT_ISUP((V)->track_script) : 1)
@@ -344,10 +351,10 @@ extern int open_vrrp_read_socket(sa_family_t, int, ifindex_t, bool);
 extern int new_vrrp_socket(vrrp_t *);
 extern void vrrp_send_link_update(vrrp_t *, unsigned);
 extern int vrrp_send_adv(vrrp_t *, uint8_t);
-extern int vrrp_state_fault_rx(vrrp_t *, char *, ssize_t);
-extern int vrrp_state_master_rx(vrrp_t *, char *, ssize_t);
+extern int vrrp_state_fault_rx(vrrp_if *, char *, ssize_t);
+extern int vrrp_state_master_rx(vrrp_if *, char *, ssize_t);
 extern int vrrp_state_master_tx(vrrp_t *, const int);
-extern void vrrp_state_backup(vrrp_t *, char *, ssize_t);
+extern void vrrp_state_backup(vrrp_if *, char *, ssize_t);
 extern void vrrp_state_goto_master(vrrp_t *);
 extern void vrrp_state_leave_master(vrrp_t *);
 extern bool vrrp_complete_init(void);
@@ -358,5 +365,6 @@ extern void clear_diff_vrrp(void);
 extern void clear_diff_script(void);
 extern void vrrp_restore_interface(vrrp_t *, bool, bool);
 extern void vrrp_remove_delayed_arp_na(vrrp_t *);
+extern bool vrrp_ifs_up(vrrp_t *vrrp);
 
 #endif

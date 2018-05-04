@@ -310,21 +310,24 @@ vrrp_int_handler(vector_t *strvec)
 {
 	vrrp_t *vrrp = LIST_TAIL_DATA(vrrp_data->vrrp);
 	char *name = strvec_slot(strvec, 1);
+	interface_t *ifp;
 
 	if (strlen(name) >= IFNAMSIZ) {
 		log_message(LOG_INFO, "Interface name '%s' too long - ignoring", name);
 		return;
 	}
 
-	vrrp->ifp = if_get_by_ifname(name);
-	if (!vrrp->ifp) {
+	ifp = if_get_by_ifname(name);
+	if (!ifp) {
 		log_message(LOG_INFO, "Cant find interface %s for vrrp_instance %s !!!"
 				    , name, vrrp->iname);
 		return;
 	}
-	else if (vrrp->ifp->hw_type == ARPHRD_LOOPBACK) {
-		log_message(LOG_INFO, "(%s): cannot use a loopback interface (%s) for vrrp - ignoring", vrrp->iname, vrrp->ifp->ifname);
-		vrrp->ifp = NULL;
+	else if (ifp->hw_type == ARPHRD_LOOPBACK) {
+		log_message(LOG_INFO, "(%s): cannot use a loopback interface (%s) for vrrp - ignoring", vrrp->iname, ifp->ifname);
+	}
+	else {
+		alloc_vrrp_if(ifp);
 	}
 }
 static void
@@ -347,8 +350,18 @@ static void
 vrrp_srcip_handler(vector_t *strvec)
 {
 	vrrp_t *vrrp = LIST_TAIL_DATA(vrrp_data->vrrp);
-	struct sockaddr_storage *saddr = &vrrp->saddr;
+	struct sockaddr_storage *saddr;
 	int ret;
+
+
+	if (LIST_ISEMPTY(vrrp->vrrp_if)) {
+		log_message(LOG_ERR, "No interface configured for VRRP instance[%s]. Skipping src address[%s]"
+				   , vrrp->iname, FMT_STR_VSLOT(strvec, 1));
+		return;
+	} else {
+		vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		saddr = &vif->saddr;
+	}
 
 	ret = inet_stosockaddr(strvec_slot(strvec, 1), 0, saddr);
 	if (ret < 0) {

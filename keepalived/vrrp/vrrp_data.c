@@ -251,6 +251,8 @@ static void
 dump_vrrp(void *data)
 {
 	vrrp_t *vrrp = data;
+	vrrp_if *vif = NULL;
+	element e;
 #ifdef _WITH_VRRP_AUTH_
 	char auth_data[sizeof(vrrp->auth_data) + 1];
 #endif
@@ -263,18 +265,27 @@ dump_vrrp(void *data)
 		log_message(LOG_INFO, "   Want State = BACKUP");
 	else
 		log_message(LOG_INFO, "   Want State = MASTER");
-	log_message(LOG_INFO, "   Running on device = %s", IF_NAME(vrrp->ifp));
+	if (LIST_EXISTS(vrrp->vrrp_if)) {
+		for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+			vif = ELEMENT_DATA(e);
+			log_message(LOG_INFO, "   Running on device = %s", IF_NAME(vif->ifp));
 #ifdef _WITH_VRRP_VMAC_
-	if (vrrp->ifp->vmac)
-		log_message(LOG_INFO, "   Real interface = %s\n", IF_NAME(if_get_by_ifindex(vrrp->ifp->base_ifindex)));
+			if (vif->ifp->vmac)
+				log_message(LOG_INFO, "   Real interface = %s\n"
+						    , IF_NAME(if_get_by_ifindex(vif->ifp->base_ifindex)));
 #endif
+		}
+	}
 	if (vrrp->dont_track_primary)
 		log_message(LOG_INFO, "   VRRP interface tracking disabled");
 	log_message(LOG_INFO, "   Skip checking advert IP addresses = %s", vrrp->skip_check_adv_addr ? "yes" : "no");
 	log_message(LOG_INFO, "   Enforcing strict VRRP compliance = %s", vrrp->strict_mode ? "yes" : "no");
-	if (vrrp->saddr.ss_family)
-		log_message(LOG_INFO, "   Using src_ip = %s"
-				    , inet_sockaddrtos(&vrrp->saddr));
+	if (!LIST_ISEMPTY(vrrp->vrrp_if)) {
+		vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		if (vif->saddr.ss_family)
+			log_message(LOG_INFO, "   Using src_ip = %s"
+					    , inet_sockaddrtos(&vif->saddr));
+	}
 	log_message(LOG_INFO, "   Gratuitous ARP delay = %d",
 		       vrrp->garp_delay/TIMER_HZ);
 	log_message(LOG_INFO, "   Gratuitous ARP repeat = %d", vrrp->garp_rep);
@@ -358,7 +369,7 @@ dump_vrrp(void *data)
 		log_message(LOG_INFO, "   Using VRRP VMAC (flags:%s|%s), vmac ifindex %u"
 				    , (__test_bit(VRRP_VMAC_UP_BIT, &vrrp->vmac_flags)) ? "UP" : "DOWN"
 				    , (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? "xmit_base" : "xmit"
-				    , vrrp->ifp->base_ifindex);
+				    , vif ? vif->ifp->base_ifindex : 0);
 #endif
 }
 
@@ -422,7 +433,6 @@ alloc_vrrp(char *iname)
 
 	/* Set default values */
 	new->family = AF_UNSPEC;
-	new->saddr.ss_family = AF_UNSPEC;
 	new->wantstate = VRRP_STATE_BACK;
 	new->version = 0;
 	new->master_priority = 0;
@@ -448,6 +458,21 @@ alloc_vrrp(char *iname)
 	new->strict_mode = PARAMETER_UNSET;
 
 	list_add(vrrp_data->vrrp, new);
+}
+
+void
+alloc_vrrp_if(interface_t *ifp)
+{
+	vrrp_t *vrrp = LIST_TAIL_DATA(vrrp_data->vrrp);
+	vrrp_if *vif;
+
+	if (!LIST_EXISTS(vrrp->vrrp_if))
+		vrrp->vrrp_if = alloc_list(NULL, NULL);
+
+	vif       = (vrrp_if*)MALLOC(sizeof(vrrp_if));
+	vif->ifp  = ifp;
+	vif->vrrp = vrrp;
+	list_add(vrrp->vrrp_if, vif);
 }
 
 void
@@ -516,7 +541,14 @@ alloc_vrrp_vip(vector_t *strvec)
 	else if (!LIST_ISEMPTY(vrrp->vip))
 		list_end = LIST_TAIL_DATA(vrrp->vip);
 
-	alloc_ipaddress(vrrp->vip, strvec, vrrp->ifp);
+	if (LIST_EXISTS(vrrp->vrrp_if) && LIST_SIZE(vrrp->vrrp_if) == 1) {
+		/* Use first and only interface */
+		vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		alloc_ipaddress(vrrp->vip, strvec, vif->ifp);
+	} else {
+		/* Interface needs to be part of VIP spec */
+		alloc_ipaddress(vrrp->vip, strvec, NULL);
+	}
 
 	if (!LIST_ISEMPTY(vrrp->vip) && LIST_TAIL_DATA(vrrp->vip) != list_end) {
 		address_family = IP_FAMILY((ip_address_t*)LIST_TAIL_DATA(vrrp->vip));
@@ -537,7 +569,15 @@ alloc_vrrp_evip(vector_t *strvec)
 
 	if (!LIST_EXISTS(vrrp->evip))
 		vrrp->evip = alloc_list(free_ipaddress, dump_ipaddress);
-	alloc_ipaddress(vrrp->evip, strvec, vrrp->ifp);
+
+	if (LIST_EXISTS(vrrp->vrrp_if) && LIST_SIZE(vrrp->vrrp_if) == 1) {
+		/* Use first and only interface */
+		vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		alloc_ipaddress(vrrp->evip, strvec, vif->ifp);
+	} else {
+		/* Interface needs to be part of VIP spec */
+		alloc_ipaddress(vrrp->evip, strvec, NULL);
+	}
 }
 
 #ifdef _HAVE_FIB_ROUTING_

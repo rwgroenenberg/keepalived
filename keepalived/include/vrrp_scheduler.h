@@ -48,10 +48,10 @@ do {						\
     (*(VRRP_FSM[(V)->state].read_timeout)) (V);	\
 } while (0)
 
-#define VRRP_FSM_READ(V, B, L)			\
+#define VRRP_FSM_READ(VI, B, L)			\
 do {						\
-  if ((*(VRRP_FSM[(V)->state].read)))		\
-    (*(VRRP_FSM[(V)->state].read)) (V, B, L);	\
+  if ((*(VRRP_FSM[(VI)->vrrp->state].read)))		\
+    (*(VRRP_FSM[(VI)->vrrp->state].read)) (VI, B, L);	\
 } while (0)
 
 /* VRRP TSM Macro */

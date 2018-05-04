@@ -412,7 +412,7 @@ vrrp_in_chk_vips(vrrp_t * vrrp, ip_address_t *ipaddress, unsigned char *buffer)
  *	  VRRP_PACKET_DROP if packet not relevant to us
  */
 static int
-vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr)
+vrrp_in_chk(vrrp_t * vrrp, vrrp_if *vif, char *buffer, ssize_t buflen_ret, bool check_vip_addr)
 {
 	struct iphdr *ip;
 	int ihl;
@@ -556,7 +556,7 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 		log_message(LOG_INFO, "(%s): Invalid auth type: %d", vrrp->iname, hd->v2.auth_type);
 		++vrrp->stats->invalid_authtype;
 #ifdef _WITH_SNMP_RFCV2_
-		vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vrrp->pkt_saddr)->sin_addr, invalidAuthType);
+		vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr, invalidAuthType);
 #endif
 		return VRRP_PACKET_KO;
 	}
@@ -572,7 +572,7 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 		       vrrp->iname, hd->v2.auth_type, vrrp->auth_type);
 		++vrrp->stats->authtype_mismatch;
 #ifdef _WITH_SNMP_RFCV2_
-		vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vrrp->pkt_saddr)->sin_addr, authTypeMismatch);
+		vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr, authTypeMismatch);
 #endif
 		return VRRP_PACKET_KO;
 	}
@@ -586,7 +586,7 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 				log_message(LOG_INFO, "(%s): received an invalid passwd!", vrrp->iname);
 				++vrrp->stats->auth_failure;
 #ifdef _WITH_SNMP_RFCV2_
-				vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vrrp->pkt_saddr)->sin_addr, authFailure);
+				vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr, authFailure);
 #endif
 				return VRRP_PACKET_KO;
 			}
@@ -596,7 +596,7 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 		else if (hd->v2.auth_type == VRRP_AUTH_AH) {
 			if (vrrp_in_chk_ipsecah(vrrp, buffer)) {
 #ifdef _WITH_SNMP_RFCV2_
-				vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vrrp->pkt_saddr)->sin_addr, authFailure);
+				vrrp_rfcv2_snmp_auth_err_trap(vrrp, ((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr, authFailure);
 #endif
 				return VRRP_PACKET_KO;
 			}
@@ -732,12 +732,12 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 			if (global_data->vrrp_check_unicast_src && !LIST_ISEMPTY(vrrp->unicast_peer)) {
 				for (e = LIST_HEAD(vrrp->unicast_peer); e; ELEMENT_NEXT(e)) {
 					up_addr = ELEMENT_DATA(e);
-					if (((struct sockaddr_in *)&vrrp->pkt_saddr)->sin_addr.s_addr == ((struct sockaddr_in *)up_addr)->sin_addr.s_addr)
+					if (((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr.s_addr == ((struct sockaddr_in *)up_addr)->sin_addr.s_addr)
 						break;
 				}
 				if (!e) {
 					log_message(LOG_INFO, "(%s): unicast source address %s not a unicast peer",
-						vrrp->iname, inet_ntop2(((struct sockaddr_in*)&vrrp->pkt_saddr)->sin_addr.s_addr));
+						vrrp->iname, inet_ntop2(((struct sockaddr_in*)&vif->pkt_saddr)->sin_addr.s_addr));
 					return VRRP_PACKET_KO;
 				}
 			}
@@ -772,12 +772,12 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 			if (global_data->vrrp_check_unicast_src && !LIST_ISEMPTY(vrrp->unicast_peer)) {
 				for (e = LIST_HEAD(vrrp->unicast_peer); e; ELEMENT_NEXT(e)) {
 					up_addr = ELEMENT_DATA(e);
-					if (IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)&vrrp->pkt_saddr)->sin6_addr, &((struct sockaddr_in6 *)up_addr)->sin6_addr))
+					if (IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)&vif->pkt_saddr)->sin6_addr, &((struct sockaddr_in6 *)up_addr)->sin6_addr))
 						break;
 				}
 				if (!e) {
 					log_message(LOG_INFO, "(%s): unicast source address %s not a unicast peer",
-						vrrp->iname, inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&vrrp->pkt_saddr)->sin6_addr,
+						vrrp->iname, inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&vif->pkt_saddr)->sin6_addr,
 							    addr_str, sizeof(addr_str)));
 					return VRRP_PACKET_KO;
 				}
@@ -802,7 +802,7 @@ vrrp_in_chk(vrrp_t * vrrp, char *buffer, ssize_t buflen_ret, bool check_vip_addr
 
 /* build IP header */
 static void
-vrrp_build_ip4(vrrp_t * vrrp, char *buffer, uint32_t dst)
+vrrp_build_ip4(vrrp_t * vrrp, char *buffer, uint32_t src, uint32_t dst)
 {
 	struct iphdr *ip = (struct iphdr *) (buffer);
 
@@ -826,7 +826,7 @@ vrrp_build_ip4(vrrp_t * vrrp, char *buffer, uint32_t dst)
 	ip->protocol = IPPROTO_VRRP;
 #endif
 
-	ip->saddr = VRRP_PKT_SADDR(vrrp);
+	ip->saddr = src;
 	ip->daddr = dst;
 
 	/* checksum must be done last */
@@ -978,7 +978,7 @@ vrrp_build_vrrp_v2(vrrp_t *vrrp, uint8_t prio, char *buffer)
 
 /* build VRRPv3 header */
 static int
-vrrp_build_vrrp_v3(vrrp_t *vrrp, uint8_t prio, char *buffer, struct iphdr *ip)
+vrrp_build_vrrp_v3(vrrp_t *vrrp, vrrp_if *vif, uint8_t prio, char *buffer, struct iphdr *ip)
 {
 	int i = 0;
 	vrrphdr_t *hd = (vrrphdr_t *) buffer;
@@ -1012,7 +1012,7 @@ vrrp_build_vrrp_v3(vrrp_t *vrrp, uint8_t prio, char *buffer, struct iphdr *ip)
 		}
 
 		/* Create IPv4 pseudo-header */
-		ipv4_phdr.src   = VRRP_PKT_SADDR(vrrp);
+		ipv4_phdr.src   = VRRP_PKT_SADDR(vif);
 #ifdef _WITH_UNICAST_CHKSUM_COMPAT_
 		ipv4_phdr.dst   = vrrp->unicast_chksum_compat <= CHKSUM_COMPATIBILITY_MIN_COMPAT
 				    ? ip->daddr : ((struct sockaddr_in *)&global_data->vrrp_mcast_group4)->sin_addr.s_addr;
@@ -1041,17 +1041,17 @@ vrrp_build_vrrp_v3(vrrp_t *vrrp, uint8_t prio, char *buffer, struct iphdr *ip)
 
 /* build VRRP header */
 static int
-vrrp_build_vrrp(vrrp_t *vrrp, uint8_t prio, char *buffer, struct iphdr* ip)
+vrrp_build_vrrp(vrrp_t *vrrp, vrrp_if *vif, uint8_t prio, char *buffer, struct iphdr* ip)
 {
 	if (vrrp->version == VRRP_VERSION_3)
-		return vrrp_build_vrrp_v3(vrrp, prio, buffer, ip);
+		return vrrp_build_vrrp_v3(vrrp, vif, prio, buffer, ip);
 
 	return vrrp_build_vrrp_v2(vrrp, prio, buffer);
 }
 
 /* build VRRP packet */
 static void
-vrrp_build_pkt(vrrp_t * vrrp, uint8_t prio, struct sockaddr_storage *addr)
+vrrp_build_pkt(vrrp_t * vrrp, vrrp_if *vif, uint8_t prio, struct sockaddr_storage *daddr)
 {
 	char *bufptr;
 	uint32_t dst;
@@ -1064,9 +1064,9 @@ vrrp_build_pkt(vrrp_t * vrrp, uint8_t prio, struct sockaddr_storage *addr)
 
 	if (vrrp->family == AF_INET) {
 		/* build the ip header */
-		dst = (addr) ? inet_sockaddrip4(addr) :
+		dst = (daddr) ? inet_sockaddrip4(daddr) :
 			       ((struct sockaddr_in *) &global_data->vrrp_mcast_group4)->sin_addr.s_addr;
-		vrrp_build_ip4(vrrp, bufptr, dst);
+		vrrp_build_ip4(vrrp, bufptr, VRRP_PKT_SADDR(vif), dst);
 		ip = (struct iphdr *)bufptr;
 
 		/* build the vrrp header */
@@ -1082,7 +1082,7 @@ vrrp_build_pkt(vrrp_t * vrrp, uint8_t prio, struct sockaddr_storage *addr)
 		if (vrrp->auth_type == VRRP_AUTH_AH)
 			vrrp->send_buffer_size -= vrrp_ipsecah_len();
 #endif
-		vrrp_build_vrrp(vrrp, prio, vrrp->send_buffer, ip);
+		vrrp_build_vrrp(vrrp, vif, prio, vrrp->send_buffer, ip);
 
 #ifdef _WITH_VRRP_AUTH_
 		/* build the IPSEC AH header */
@@ -1092,7 +1092,7 @@ vrrp_build_pkt(vrrp_t * vrrp, uint8_t prio, struct sockaddr_storage *addr)
 		}
 #endif
 	} else if (vrrp->family == AF_INET6) {
-		vrrp_build_vrrp(vrrp, prio, VRRP_SEND_BUFFER(vrrp), NULL);
+		vrrp_build_vrrp(vrrp, vif, prio, VRRP_SEND_BUFFER(vrrp), NULL);
 	}
 
 	/* restore reference values */
@@ -1127,9 +1127,9 @@ vrrp_build_ancillary_data(struct msghdr *msg, char *cbuf, struct sockaddr_storag
 }
 
 static ssize_t
-vrrp_send_pkt(vrrp_t * vrrp, struct sockaddr_storage *addr)
+vrrp_send_pkt(vrrp_t * vrrp, vrrp_if *vif, struct sockaddr_storage *addr)
 {
-	struct sockaddr_storage *src = &vrrp->saddr;
+	struct sockaddr_storage *src = &vif->saddr;
 	struct sockaddr_in6 dst6;
 	struct sockaddr_in dst4;
 	struct msghdr msg;
@@ -1167,7 +1167,8 @@ vrrp_send_pkt(vrrp_t * vrrp, struct sockaddr_storage *addr)
 	}
 
 	/* Send the packet */
-	return sendmsg(vrrp->fd_out, &msg, (addr) ? 0 : MSG_DONTROUTE);
+log_message(LOG_NOTICE, "   sendmsg on %s", vif->ifp->ifname);
+	return sendmsg(vif->fd_out, &msg, (addr) ? 0 : MSG_DONTROUTE);
 }
 
 /* Allocate the sending buffer */
@@ -1194,7 +1195,10 @@ vrrp_send_adv(vrrp_t * vrrp, uint8_t prio)
 	struct sockaddr_storage *addr;
 	list l = vrrp->unicast_peer;
 	element e;
+	vrrp_if *vif;
 	ssize_t ret;
+
+log_message(LOG_NOTICE, "Sending VRRP advertisement (prio %d)", prio);
 
 	/* alloc send buffer */
 	if (!vrrp->send_buffer)
@@ -1204,18 +1208,35 @@ vrrp_send_adv(vrrp_t * vrrp, uint8_t prio)
 
 	/* build the packet */
 	if (!LIST_ISEMPTY(l)) {
-		for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
-			addr = ELEMENT_DATA(e);
-			vrrp_build_pkt(vrrp, prio, addr);
-			ret = vrrp_send_pkt(vrrp, addr);
-			if (ret < 0) {
-				log_message(LOG_INFO, "VRRP_Instance(%s) Cant send advert to %s (%m)"
-						    , vrrp->iname, inet_sockaddrtos(addr));
+		/* Unicast */
+		if (!LIST_ISEMPTY(vrrp->vrrp_if)) {
+			vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+
+			for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+				addr = ELEMENT_DATA(e);
+#warning TODO match i/f vs addr
+				vrrp_build_pkt(vrrp, vif, prio, addr);
+				ret = vrrp_send_pkt(vrrp, vif, addr);
+				if (ret < 0) {
+					log_message(LOG_INFO, "VRRP_Instance(%s) Cant send advert to %s (%m)"
+							    , vrrp->iname, inet_sockaddrtos(addr));
+				}
 			}
+		} else {
+			log_message(LOG_ERR, "No source address for unicast VRRP");
+			return 1;
+		}
+	} else if (!LIST_ISEMPTY(vrrp->vrrp_if)) {
+		/* Multicast on configured interfaces */
+		l = vrrp->vrrp_if;
+		for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+			vif = ELEMENT_DATA(e);
+			vrrp_build_pkt(vrrp, vif, prio, NULL);
+			vrrp_send_pkt(vrrp, vif, NULL);
 		}
 	} else {
-		vrrp_build_pkt(vrrp, prio, NULL);
-		vrrp_send_pkt(vrrp, NULL);
+		log_message(LOG_ERR, "No interface for mulicast VRRP");
+		return 1;
 	}
 
 	++vrrp->stats->advert_sent;
@@ -1225,21 +1246,26 @@ vrrp_send_adv(vrrp_t * vrrp, uint8_t prio)
 
 /* Received packet processing */
 static int
-vrrp_check_packet(vrrp_t * vrrp, char *buf, ssize_t buflen, bool check_vip_addr)
+vrrp_check_packet(vrrp_t * vrrp, vrrp_if *vif, char *buf, ssize_t buflen, bool check_vip_addr)
 {
 	int ret;
 
 	if (buflen > 0) {
-		ret = vrrp_in_chk(vrrp, buf, buflen, check_vip_addr);
+		ret = vrrp_in_chk(vrrp, vif, buf, buflen, check_vip_addr);
 
 		if (ret == VRRP_PACKET_DROP) {
 			log_message(LOG_INFO, "Sync instance needed on %s !!!",
-			       IF_NAME(vrrp->ifp));
+			       IF_NAME(vif->ifp));
 		}
 
 		else if (ret == VRRP_PACKET_KO)
 			log_message(LOG_INFO, "bogus VRRP packet received on %s !!!",
-			       IF_NAME(vrrp->ifp));
+			       IF_NAME(vif->ifp));
+		else {
+			/* Correct packet */
+			vrrp->last_adver_rx = timer_now();
+		}
+
 		return ret;
 	}
 
@@ -1359,8 +1385,13 @@ vrrp_state_become_master(vrrp_t * vrrp)
 	/* remotes neighbour update */
 	if (vrrp->family == AF_INET6) {
 		/* Refresh whether we are acting as a router for NA messages */
-		ifp = IF_BASE_IFP(vrrp->ifp);
-		ifp->gna_router = get_ipv6_forwarding(ifp);
+		vrrp_if *vif;
+		element e;
+		for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+			vif = ELEMENT_DATA(e);
+			ifp = IF_BASE_IFP(vif->ifp);
+			ifp->gna_router = get_ipv6_forwarding(ifp);
+		}
 	}
 	vrrp_send_link_update(vrrp, vrrp->garp_rep);
 
@@ -1509,8 +1540,9 @@ vrrp_state_leave_master(vrrp_t * vrrp)
 
 /* BACKUP state processing */
 void
-vrrp_state_backup(vrrp_t * vrrp, char *buf, ssize_t buflen)
+vrrp_state_backup(vrrp_if *vif, char *buf, ssize_t buflen)
 {
+	vrrp_t *vrrp = vif->vrrp;
 	vrrphdr_t *hd;
 	ssize_t ret = 0;
 	unsigned master_adver_int, proto;
@@ -1519,19 +1551,19 @@ vrrp_state_backup(vrrp_t * vrrp, char *buf, ssize_t buflen)
 	/* Process the incoming packet */
 	hd = vrrp_get_header(vrrp->family, buf, &proto);
 	if (!vrrp->skip_check_adv_addr ||
-	    vrrp->master_saddr.ss_family != vrrp->pkt_saddr.ss_family)
+	    vif->master_saddr.ss_family != vif->pkt_saddr.ss_family)
 		check_addr = true;
 	else {
 		/* Check if the addresses are different */
-		if (vrrp->pkt_saddr.ss_family == AF_INET) {
-			if (((struct sockaddr_in*)&vrrp->pkt_saddr)->sin_addr.s_addr != ((struct sockaddr_in*)&vrrp->master_saddr)->sin_addr.s_addr)
+		if (vif->pkt_saddr.ss_family == AF_INET) {
+			if (((struct sockaddr_in*)&vif->pkt_saddr)->sin_addr.s_addr != ((struct sockaddr_in*)&vif->master_saddr)->sin_addr.s_addr)
 				check_addr = true ;
 		} else {
-			if (!IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6*)&vrrp->pkt_saddr)->sin6_addr, &((struct sockaddr_in6*)&vrrp->master_saddr)->sin6_addr))
+			if (!IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6*)&vif->pkt_saddr)->sin6_addr, &((struct sockaddr_in6*)&vif->master_saddr)->sin6_addr))
 				check_addr = true;
 		}
 	}
-	ret = vrrp_check_packet(vrrp, buf, buflen, check_addr);
+	ret = vrrp_check_packet(vrrp, vif, buf, buflen, check_addr);
 
 	if (ret == VRRP_PACKET_KO || ret == VRRP_PACKET_NULL) {
 		log_message(LOG_INFO, "VRRP_Instance(%s) ignoring received advertisment..."
@@ -1565,7 +1597,7 @@ vrrp_state_backup(vrrp_t * vrrp, char *buf, ssize_t buflen)
 		else {
 			vrrp->ms_down_timer = 3 * vrrp->adver_int + VRRP_TIMER_SKEW(vrrp);
 		}
-		vrrp->master_saddr = vrrp->pkt_saddr;
+		vif->master_saddr = vif->pkt_saddr;
 		vrrp->master_priority = hd->priority;
 
 		if (vrrp->preempt_delay) {
@@ -1598,7 +1630,7 @@ vrrp_state_backup(vrrp_t * vrrp, char *buf, ssize_t buflen)
 
 /* MASTER state processing */
 int
-vrrp_state_master_tx(vrrp_t * vrrp, const int prio)
+vrrp_state_master_tx(vrrp_t *vrrp, const int prio)
 {
 	int ret = 0;
 
@@ -1620,17 +1652,17 @@ vrrp_state_master_tx(vrrp_t * vrrp, const int prio)
 }
 
 static int
-vrrp_saddr_cmp(struct sockaddr_storage *addr, vrrp_t *vrrp)
+vrrp_saddr_cmp(struct sockaddr_storage *addr, vrrp_if *vif)
 {
-	interface_t *ifp = vrrp->ifp;
+	interface_t *ifp = vif->ifp;
 
 	/* Simple sanity */
-	if (vrrp->saddr.ss_family && addr->ss_family != vrrp->saddr.ss_family)
+	if (vif->saddr.ss_family && addr->ss_family != vif->saddr.ss_family)
 		return 0;
 
 	/* Configured source IP address */
-	if (vrrp->saddr.ss_family)
-		return inet_sockaddrcmp(addr, &vrrp->saddr);
+	if (vif->saddr.ss_family)
+		return inet_sockaddrcmp(addr, &vif->saddr);
 
 	/* Default interface source IP address */
 	if (addr->ss_family == AF_INET)
@@ -1645,8 +1677,9 @@ vrrp_saddr_cmp(struct sockaddr_storage *addr, vrrp_t *vrrp)
 }
 
 int
-vrrp_state_master_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
+vrrp_state_master_rx(vrrp_if *vif, char *buf, ssize_t buflen)
 {
+	vrrp_t *vrrp = vif->vrrp;
 	vrrphdr_t *hd;
 	ssize_t ret;
 	unsigned proto = 0;
@@ -1667,7 +1700,7 @@ vrrp_state_master_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
 
 	/* Process the incoming packet */
 	hd = vrrp_get_header(vrrp->family, buf, &proto);
-	ret = vrrp_check_packet(vrrp, buf, buflen, true);
+	ret = vrrp_check_packet(vrrp, vif, buf, buflen, true);
 
 	if (ret == VRRP_PACKET_KO ||
 	    ret == VRRP_PACKET_NULL || ret == VRRP_PACKET_DROP) {
@@ -1677,7 +1710,7 @@ vrrp_state_master_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
 		return 0;
 	}
 
-	addr_cmp = vrrp_saddr_cmp(&vrrp->pkt_saddr, vrrp);
+	addr_cmp = vrrp_saddr_cmp(&vif->pkt_saddr, vif);
 
 	if (hd->priority == 0 ||
 	    (vrrp->higher_prio_send_advert &&
@@ -1739,7 +1772,7 @@ vrrp_state_master_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
 					    , vrrp->iname, hd->priority, vrrp->effective_priority);
 		else
 			log_message(LOG_INFO, "VRRP_Instance(%s) Master received advert with same priority %d but higher IP address than ours (%s)"
-					    , vrrp->iname, hd->priority, inet_sockaddrtos(&vrrp->pkt_saddr));
+					    , vrrp->iname, hd->priority, inet_sockaddrtos(&vif->pkt_saddr));
 #ifdef _WITH_VRRP_AUTH_
 		if (proto == IPPROTO_IPSEC_AH) {
 			ah = (ipsec_ah_t *) (buf + sizeof(struct iphdr));
@@ -1775,15 +1808,16 @@ vrrp_state_master_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
 }
 
 int
-vrrp_state_fault_rx(vrrp_t * vrrp, char *buf, ssize_t buflen)
+vrrp_state_fault_rx(vrrp_if *vif, char *buf, ssize_t buflen)
 {
+	vrrp_t *vrrp = vif->vrrp;
 	vrrphdr_t *hd;
 	ssize_t ret = 0;
 	unsigned proto;
 
 	/* Process the incoming packet */
 	hd = vrrp_get_header(vrrp->family, buf, &proto);
-	ret = vrrp_check_packet(vrrp, buf, buflen, true);
+	ret = vrrp_check_packet(vrrp, vif, buf, buflen, true);
 
 	if (ret == VRRP_PACKET_KO || ret == VRRP_PACKET_NULL || ret == VRRP_PACKET_DROP) {
 		log_message(LOG_INFO, "VRRP_Instance(%s) Dropping received VRRP packet..."
@@ -1806,7 +1840,7 @@ chk_min_cfg(vrrp_t * vrrp)
 		       vrrp->iname);
 		return false;
 	}
-	if (!vrrp->ifp) {
+	if (LIST_ISEMPTY(vrrp->vrrp_if)) {
 		log_message(LOG_INFO, "VRRP_Instance(%s) Unknown interface !",
 		       vrrp->iname);
 		return false;
@@ -1917,47 +1951,61 @@ open_vrrp_read_socket(sa_family_t family, int proto, ifindex_t idx, bool unicast
 }
 
 static void
-close_vrrp_socket(vrrp_t * vrrp)
+close_vrrp_socket(vrrp_if *vif)
 {
-	if (LIST_ISEMPTY(vrrp->unicast_peer))
-		if_leave_vrrp_group(vrrp->family, vrrp->fd_in, vrrp->ifp);
+	vrrp_t *vrrp = vif->vrrp;
 
-	close(vrrp->fd_in);
-	close(vrrp->fd_out);
+	if (LIST_ISEMPTY(vrrp->unicast_peer))
+		if_leave_vrrp_group(vrrp->family, vif->fd_in, vif->ifp);
+
+	close(vif->fd_in);
+	close(vif->fd_out);
 }
 
 int
 new_vrrp_socket(vrrp_t * vrrp)
 {
-	int old_fd = vrrp->fd_in;
+	vrrp_if *vif;
+	element e;
+	int old_fd;
+	int fd = -1;
 	int proto;
 	ifindex_t ifindex;
 	bool unicast;
 
-	/* close the desc & open a new one */
-	close_vrrp_socket(vrrp);
-	remove_vrrp_fd_bucket(vrrp);
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+
+		/* close the desc & open a new one */
+		old_fd = vif->fd_in;
+		close_vrrp_socket(vif);
+		remove_vrrp_fd_bucket(vif);
 #ifdef _WITH_VRRP_AUTH_
-	if (vrrp->version == VRRP_VERSION_2)
-		proto =(vrrp->auth_type == VRRP_AUTH_AH) ? IPPROTO_IPSEC_AH :
-				IPPROTO_VRRP;
-	else
+		if (vrrp->version == VRRP_VERSION_2)
+			proto =(vrrp->auth_type == VRRP_AUTH_AH) ? IPPROTO_IPSEC_AH :
+					IPPROTO_VRRP;
+		else
 #endif
-		proto = IPPROTO_VRRP;
-	ifindex =
+			proto = IPPROTO_VRRP;
+		ifindex =
 #ifdef _HAVE_VRRP_VMAC_
-		 (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vrrp->ifp) :
+			 (__test_bit(VRRP_VMAC_XMITBASE_BIT, &vrrp->vmac_flags)) ? IF_BASE_INDEX(vif->ifp) :
 #endif
-									    IF_INDEX(vrrp->ifp);
-	unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
-	vrrp->fd_in = open_vrrp_read_socket(vrrp->family, proto, ifindex, unicast);
-	vrrp->fd_out = open_vrrp_send_socket(vrrp->family, proto, ifindex, unicast);
-	alloc_vrrp_fd_bucket(vrrp);
+										    IF_INDEX(vif->ifp);
+		unicast = !LIST_ISEMPTY(vrrp->unicast_peer);
+		vif->fd_in = open_vrrp_read_socket(vrrp->family, proto, ifindex, unicast);
+		vif->fd_out = open_vrrp_send_socket(vrrp->family, proto, ifindex, unicast);
+		alloc_vrrp_fd_bucket(vif);
 
-	/* Sync the other desc */
-	set_vrrp_fd_bucket(old_fd, vrrp);
+		/* Sync the other desc */
+		set_vrrp_fd_bucket(old_fd, vif);
 
-	return vrrp->fd_in;
+		fd = vif->fd_in;
+		if (fd < 0)
+			break;
+	}
+
+	return fd;
 }
 
 /* handle terminate state phase 1 */
@@ -1985,7 +2033,9 @@ shutdown_vrrp_instances(void)
 {
 	list l = vrrp_data->vrrp;
 	element e;
+	element e_vif;
 	vrrp_t *vrrp;
+	vrrp_if *vif;
 
 #ifdef _HAVE_VRRP_VMAC_
 	restore_rp_filter();
@@ -1995,15 +2045,15 @@ shutdown_vrrp_instances(void)
 		vrrp = ELEMENT_DATA(e);
 
 		/* We may not have an ifp if we are aborting at startup */
-		if (vrrp->ifp) {
+		for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vif = ELEMENT_DATA(e_vif);
 #ifdef _HAVE_VRRP_VMAC_
 			/* Remove VMAC */
 			if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags))
 				netlink_link_del_vmac(vrrp);
 #endif
-
-			if (vrrp->ifp->reset_promote_secondaries)
-				reset_promote_secondaries(vrrp->ifp);
+			if (vif->ifp->reset_promote_secondaries)
+				reset_promote_secondaries(vif->ifp);
 		}
 
 		/* Run stop script */
@@ -2044,6 +2094,8 @@ vrrp_complete_instance(vrrp_t * vrrp)
 	size_t i;
 	element next;
 	bool interface_already_existed = false;
+	vrrp_if *vif;
+	element e_vif;
 
 	if (vrrp->strict_mode == PARAMETER_UNSET)
 		vrrp->strict_mode = global_data->vrrp_strict;
@@ -2104,9 +2156,12 @@ vrrp_complete_instance(vrrp_t * vrrp)
 
 #ifdef _HAVE_VRRP_VMAC_
 	/* Check that the underlying interface type is Ethernet if using a VMAC */
-	if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags) && vrrp->ifp->hw_type != ARPHRD_ETHER) {
-		log_message(LOG_INFO, "(%s): vmacs are only supported on Ethernet type interfaces", vrrp->iname);
-		return false;
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+		if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags) && vif->ifp->hw_type != ARPHRD_ETHER) {
+			log_message(LOG_INFO, "(%s): vmacs are only supported on Ethernet type interfaces", vrrp->iname);
+			return false;
+		}
 	}
 #endif
 
@@ -2117,6 +2172,7 @@ vrrp_complete_instance(vrrp_t * vrrp)
 	}
 
 	/* Check we can fit the VIPs into a packet */
+	vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
 	if (vrrp->family == AF_INET) {
 		hdr_len = sizeof(struct ether_header) + sizeof(struct iphdr) + sizeof(vrrphdr_t);
 
@@ -2129,10 +2185,10 @@ vrrp_complete_instance(vrrp_t * vrrp)
 #endif
 		}
 
-		max_addr = (vrrp->ifp->mtu - hdr_len) / sizeof(struct in_addr);
+		max_addr = (vif->ifp->mtu - hdr_len) / sizeof(struct in_addr);
 	} else {
 		hdr_len = sizeof(struct ether_header) + sizeof(struct ip6_hdr) + sizeof(vrrphdr_t);
-		max_addr = (vrrp->ifp->mtu - hdr_len) / sizeof(struct in6_addr);
+		max_addr = (vif->ifp->mtu - hdr_len) / sizeof(struct in6_addr);
 	}
 
 	/* Count IP addrs field is 8 bits wide, giving a maximum address count of 255 */
@@ -2272,6 +2328,9 @@ vrrp_complete_instance(vrrp_t * vrrp)
 		/* Look to see if an existing interface matches. If so, use that name */
 		list if_list = get_if_list();
 		if (!LIST_ISEMPTY(if_list)) {		/* If the list were empty we would have a real problem! */
+			/* Use first interface */
+			vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+			
 			for (e = LIST_HEAD(if_list); e; ELEMENT_NEXT(e)) {
 				ifp = ELEMENT_DATA(e);
 				/* Check if this interface could be the macvlan for this vrrp */
@@ -2280,7 +2339,7 @@ vrrp_complete_instance(vrrp_t * vrrp)
 				    ((vrrp->family == AF_INET && ifp->hw_addr[sizeof(ll_addr) - 2] == 0x01) ||
 				     (vrrp->family == AF_INET6 && ifp->hw_addr[sizeof(ll_addr) - 2] == 0x02)) &&
 				    ifp->hw_addr[sizeof(ll_addr) - 1] == vrrp->vrid &&
-				    ifp->base_ifindex == vrrp->ifp->ifindex)
+				    ifp->base_ifindex == vif->ifp->ifindex)
 				{
 					log_message(LOG_INFO, "(%s): Found matching interface %s", vrrp->iname, ifp->ifname);
 					if (vrrp->vmac_ifname[0] &&
@@ -2288,7 +2347,7 @@ vrrp_complete_instance(vrrp_t * vrrp)
 						log_message(LOG_INFO, "(%s): vmac name mismatch %s <=> %s; changing to %s.", vrrp->iname, vrrp->vmac_ifname, ifp->ifname, ifp->ifname);
 
 					strcpy(vrrp->vmac_ifname, ifp->ifname);
-					vrrp->ifp = ifp;
+					vif->ifp = ifp;
 					vrrp->vmac_ifindex = ifp->ifindex;
 					__set_bit(VRRP_VMAC_UP_BIT, &vrrp->vmac_flags);
 
@@ -2365,37 +2424,41 @@ vrrp_complete_instance(vrrp_t * vrrp)
 		interface_already_existed = true;
 	}
 
-	base_ifp = base_if_get_by_ifp(vrrp->ifp);
+	for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+		vif = ELEMENT_DATA(e_vif);
 
-	/* Make sure we have an IP address as needed */
-	if (vrrp->saddr.ss_family == AF_UNSPEC) {
-		/* Check the physical interface has a suitable address we can use.
-		 * We don't need an IPv6 address on the underlying interface if it is
-		 * a VMAC since we can create our own. */
-		bool addr_missing = false;
+		base_ifp = base_if_get_by_ifp(vif->ifp);
 
-		if (vrrp->family == AF_INET) {
-			if (!base_ifp->sin_addr.s_addr)
-				addr_missing = true;
-		}
+		/* Make sure we have an IP address as needed */
+		if (vif->saddr.ss_family == AF_UNSPEC) {
+			/* Check the physical interface has a suitable address we can use.
+			 * We don't need an IPv6 address on the underlying interface if it is
+			 * a VMAC since we can create our own. */
+			bool addr_missing = false;
+
+			if (vrrp->family == AF_INET) {
+				if (!base_ifp->sin_addr.s_addr)
+					addr_missing = true;
+			}
 #ifdef _HAVE_VRRP_VMAC_
-		else if (!__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags)) {
-			if (!base_ifp->sin6_addr.s6_addr32[0])
-				addr_missing = true;
-		}
+			else if (!__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags)) {
+				if (!base_ifp->sin6_addr.s6_addr32[0])
+					addr_missing = true;
+			}
 #endif
 
-		if (addr_missing) {
-			log_message(LOG_INFO, "(%s): Cannot find an IP address to use for interface %s", vrrp->iname, base_ifp->ifname);
-			return false;
-		}
+			if (addr_missing) {
+				log_message(LOG_INFO, "(%s): Cannot find an IP address to use for interface %s", vrrp->iname, base_ifp->ifname);
+				return false;
+			}
 
-		if (vrrp->family == AF_INET) {
-			inet_ip4tosockaddr(&base_ifp->sin_addr, &vrrp->saddr);
-		} else if (vrrp->family == AF_INET6) {
-			inet_ip6tosockaddr(&base_ifp->sin6_addr, &vrrp->saddr);
-			/* IPv6 use-case: Binding to link-local address requires an interface */
-			inet_ip6scopeid(IF_INDEX(vrrp->ifp), &vrrp->saddr);
+			if (vrrp->family == AF_INET) {
+				inet_ip4tosockaddr(&base_ifp->sin_addr, &vif->saddr);
+			} else if (vrrp->family == AF_INET6) {
+				inet_ip6tosockaddr(&base_ifp->sin6_addr, &vif->saddr);
+				/* IPv6 use-case: Binding to link-local address requires an interface */
+				inet_ip6scopeid(IF_INDEX(vif->ifp), &vif->saddr);
+			}
 		}
 	}
 
@@ -2424,8 +2487,9 @@ vrrp_complete_instance(vrrp_t * vrrp)
 			netlink_link_add_vmac(vrrp);
 
 		/* set scopeid of source address if IPv6 */
-		if (vrrp->saddr.ss_family == AF_INET6)
-			inet_ip6scopeid(vrrp->vmac_ifindex, &vrrp->saddr);
+		vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		if (vif->saddr.ss_family == AF_INET6)
+			inet_ip6scopeid(vrrp->vmac_ifindex, &vif->saddr);
 	}
 #endif
 
@@ -2441,12 +2505,15 @@ vrrp_complete_instance(vrrp_t * vrrp)
 		else
 			block_ipv6 = true;
 	}
+
+	/* VIPs w/o specified interface are tied to the first VRRP interface */
+	vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
 	if (!LIST_ISEMPTY(vrrp->vip)) {
 		for (e = LIST_HEAD(vrrp->vip); e; ELEMENT_NEXT(e)) {
 			vip = ELEMENT_DATA(e);
 			if (!vip->ifa.ifa_index) {
-				vip->ifa.ifa_index = vrrp->ifp->ifindex;
-				vip->ifp = vrrp->ifp;
+				vip->ifa.ifa_index = vif->ifp->ifindex;
+				vip->ifp = vif->ifp;
 			}
 		}
 	}
@@ -2454,8 +2521,8 @@ vrrp_complete_instance(vrrp_t * vrrp)
 		for (e = LIST_HEAD(vrrp->evip); e; ELEMENT_NEXT(e)) {
 			vip = ELEMENT_DATA(e);
 			if (!vip->ifa.ifa_index) {
-				vip->ifa.ifa_index = vrrp->ifp->ifindex;
-				vip->ifp = vrrp->ifp;
+				vip->ifa.ifa_index = vif->ifp->ifindex;
+				vip->ifp = vif->ifp;
 			}
 		}
 	}
@@ -2466,9 +2533,14 @@ vrrp_complete_instance(vrrp_t * vrrp)
 	}
 
 	/* See if we need to set promote_secondaries */
-	if (vrrp->promote_secondaries &&
-	    !vrrp->ifp->promote_secondaries_already_set)
-		set_promote_secondaries(vrrp->ifp);
+	if (vrrp->promote_secondaries) {
+		for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vif = ELEMENT_DATA(e_vif);
+
+			if (!vif->ifp->promote_secondaries_already_set)
+				set_promote_secondaries(vif->ifp);
+		}
+	}
 
 	return true;
 }
@@ -2496,6 +2568,8 @@ vrrp_complete_init(void)
 	ifindex_t ifindex;
 	ifindex_t ifindex_o;
 	size_t max_mtu_len = 0;
+	vrrp_if *vif;
+	element e_vif;
 
 	/* Set defaults of not specified, depending on strict mode */
 	if (global_data->vrrp_garp_lower_prio_rep == PARAMETER_UNSET)
@@ -2510,8 +2584,11 @@ vrrp_complete_init(void)
 		if (!vrrp_complete_instance(vrrp))
 			return false;
 
-		if (vrrp->ifp->mtu > max_mtu_len)
-			max_mtu_len = vrrp->ifp->mtu;
+		for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vif = ELEMENT_DATA(e_vif);
+			if (vif->ifp->mtu > max_mtu_len)
+				max_mtu_len = vif->ifp->mtu;
+		}
 	}
 
 	/* If we have a global garp_delay add it to any interfaces without a garp_delay */
@@ -2525,31 +2602,36 @@ vrrp_complete_init(void)
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vrrp = ELEMENT_DATA(e);
 		l_o = &vrrp_data->vrrp_index[vrrp->vrid];
-#ifdef _HAVE_VRRP_VMAC_
-		if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags))
-			ifindex = vrrp->ifp->base_ifindex;
-		else
-#endif
-			ifindex = vrrp->ifp->ifindex;
 
-		/* Check if any other entries with same vrid conflict */
-		if (!LIST_ISEMPTY(l_o) && LIST_SIZE(l_o) > 1) {
-			/* Can't have same vrid with same family an interface */
-			for (e_o = LIST_HEAD(l_o); e_o; ELEMENT_NEXT(e_o)) {
-				vrrp_o = ELEMENT_DATA(e_o);
-				if (vrrp_o != vrrp &&
-				    vrrp_o->family == vrrp->family) {
+		for (e_vif = LIST_HEAD(vrrp->vrrp_if); e_vif; ELEMENT_NEXT(e_vif)) {
+			vrrp_if *vif = ELEMENT_DATA(e_vif);
 #ifdef _HAVE_VRRP_VMAC_
-					if (__test_bit(VRRP_VMAC_BIT, &vrrp_o->vmac_flags))
-						ifindex_o = vrrp_o->ifp->base_ifindex;
-					else
+			if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags))
+				ifindex = vif->ifp->base_ifindex;
+			else
 #endif
-						ifindex_o = vrrp_o->ifp->ifindex;
+				ifindex = vif->ifp->ifindex;
 
-					if (ifindex == ifindex_o)
-					{
-						log_message(LOG_INFO, "VRID %d is duplicated on interface %s", vrrp->vrid, if_get_by_ifindex(ifindex)->ifname);
-						return false;
+			/* Check if any other entries with same vrid conflict */
+			if (!LIST_ISEMPTY(l_o) && LIST_SIZE(l_o) > 1) {
+				/* Can't have same vrid with same family and interface */
+				for (e_o = LIST_HEAD(l_o); e_o; ELEMENT_NEXT(e_o)) {
+					vrrp_if *vif_o = ELEMENT_DATA(e_o);
+					vrrp_o = vif_o->vrrp;
+					if (vif_o->vrrp != vrrp &&
+					    vrrp_o->family == vrrp->family) {
+#ifdef _HAVE_VRRP_VMAC_
+						if (__test_bit(VRRP_VMAC_BIT, &vrrp_o->vmac_flags))
+							ifindex_o = vif_o->ifp->base_ifindex;
+						else
+#endif
+							ifindex_o = vif_o->ifp->ifindex;
+
+						if (ifindex == ifindex_o)
+						{
+							log_message(LOG_INFO, "VRID %d is duplicated on interface %s", vrrp->vrid, if_get_by_ifindex(ifindex)->ifname);
+							return false;
+						}
 					}
 				}
 			}
@@ -2698,9 +2780,13 @@ vrrp_exist(vrrp_t *old_vrrp)
 {
 	element e;
 	vrrp_t *vrrp;
+	vrrp_if *vif, *old_vif;
 
 	if (LIST_ISEMPTY(vrrp_data->vrrp))
 		return NULL;
+
+	/* First interface */
+	old_vif = ELEMENT_DATA(LIST_HEAD(old_vrrp->vrrp_if));
 
 	for (e = LIST_HEAD(vrrp_data->vrrp); e; ELEMENT_NEXT(e)) {
 		vrrp = ELEMENT_DATA(e);
@@ -2708,19 +2794,20 @@ vrrp_exist(vrrp_t *old_vrrp)
 		    vrrp->family != old_vrrp->family)
 			continue;
 
+		vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
 #ifndef _HAVE_VRRP_VMAC_
-		if (vrrp->ifp->ifindex == old_vrrp->ifp->ifindex)
+		if (vif->ifp->ifindex == old_vif->ifp->ifindex)
 			return vrrp;
 #else
 		if (__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags) != __test_bit(VRRP_VMAC_BIT, &old_vrrp->vmac_flags))
 			continue;
 		if (!__test_bit(VRRP_VMAC_BIT, &vrrp->vmac_flags)) {
-			if (vrrp->ifp->ifindex == old_vrrp->ifp->ifindex)
+			if (vif->ifp->ifindex == old_vif->ifp->ifindex)
 				return vrrp;
 			continue;
 		}
 
-		if (vrrp->ifp->base_ifindex == old_vrrp->ifp->base_ifindex)
+		if (vif->ifp->base_ifindex == old_vif->ifp->base_ifindex)
 			return vrrp;
 #endif
 	}
@@ -2900,8 +2987,13 @@ clear_diff_vrrp(void)
 				/* remotes neighbour update */
 				if (new_vrrp->family == AF_INET6) {
 					/* Refresh whether we are acting as a router for NA messages */
-					ifp = IF_BASE_IFP(new_vrrp->ifp);
-					ifp->gna_router = get_ipv6_forwarding(ifp);
+					vrrp_if *vif;
+					element e;
+					for (e = LIST_HEAD(new_vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+						vif = ELEMENT_DATA(e);
+						ifp = IF_BASE_IFP(vif->ifp);
+						ifp->gna_router = get_ipv6_forwarding(ifp);
+					}
 				}
 				vrrp_send_link_update(new_vrrp, new_vrrp->garp_rep);
 
@@ -2936,5 +3028,21 @@ clear_diff_script(void)
 			}
 		}
 	}
+}
+
+bool
+vrrp_ifs_up(vrrp_t *vrrp)
+{
+	vrrp_if *vif;
+	element e;
+
+	for (e = LIST_HEAD(vrrp->vrrp_if); e; ELEMENT_NEXT(e)) {
+		vif = ELEMENT_DATA(e);
+		if (!IF_ISUP(vif->ifp)) {
+log_message(LOG_NOTICE, "VIF %s is down", vif->ifp->ifname);
+			return false;
+		}
+	}
+	return true;
 }
 
