@@ -199,20 +199,6 @@ dump_sock(void *sock_data)
 }
 
 static void
-free_unicast_peer(void *data)
-{
-	FREE(data);
-}
-
-static void
-dump_unicast_peer(void *data)
-{
-	struct sockaddr_storage *peer = data;
-
-	log_message(LOG_INFO, "     %s", inet_sockaddrtos(peer));
-}
-
-static void
 free_vrrp(void *data)
 {
 	vrrp_t *vrrp = data;
@@ -479,34 +465,34 @@ void
 alloc_vrrp_unicast_peer(vector_t *strvec)
 {
 	vrrp_t *vrrp = LIST_TAIL_DATA(vrrp_data->vrrp);
-	struct sockaddr_storage *peer = NULL;
-	int ret;
+	list l = vrrp->unicast_peer;
+	void *list_end = NULL;
+	sa_family_t address_family;
 
-	if (!LIST_EXISTS(vrrp->unicast_peer))
-		vrrp->unicast_peer = alloc_list(free_unicast_peer, dump_unicast_peer);
+	if (!LIST_EXISTS(l))
+		l = vrrp->unicast_peer = alloc_list(free_ipaddress, dump_ipaddress);
+	else if (!LIST_ISEMPTY(l))
+		list_end = LIST_TAIL_DATA(l);
 
-	/* Allocate new unicast peer */
-	peer = (struct sockaddr_storage *) MALLOC(sizeof(struct sockaddr_storage));
-	ret = inet_stosockaddr(strvec_slot(strvec, 0), 0, peer);
-	if (ret < 0) {
-		log_message(LOG_ERR, "Configuration error: VRRP instance[%s] malformed unicast"
-				     " peer address[%s]. Skipping..."
-				   , vrrp->iname, FMT_STR_VSLOT(strvec, 0));
-		FREE(peer);
-		return;
+	/* Add new unicast peer */
+	if (LIST_EXISTS(vrrp->vrrp_if) && LIST_SIZE(vrrp->vrrp_if) == 1) {
+		/* Use first and only interface */
+		vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+	} else {
+		/* Interface needs to be part of unicast spec */
+		alloc_ipaddress(l, strvec, NULL);
 	}
 
-	if (!vrrp->family)
-		vrrp->family = peer->ss_family;
-	else if (peer->ss_family != vrrp->family) {
-		log_message(LOG_ERR, "Configuration error: VRRP instance[%s] and unicast peer address"
-				     "[%s] MUST be of the same family !!! Skipping..."
-				   , vrrp->iname, FMT_STR_VSLOT(strvec, 0));
-		FREE(peer);
-		return;
-	}
+	if (!LIST_ISEMPTY(l) && LIST_TAIL_DATA(l) != list_end) {
+		address_family = IP_FAMILY((ip_address_t*)LIST_TAIL_DATA(l));
 
-	list_add(vrrp->unicast_peer, peer);
+		if (vrrp->family == AF_UNSPEC)
+			vrrp->family = address_family;
+		else if (address_family != vrrp->family) {
+			log_message(LOG_INFO, "(%s): address family must match VRRP instance [%s] - ignoring", vrrp->iname, FMT_STR_VSLOT(strvec, 0));
+			free_list_element(vrrp->vip, vrrp->vip->tail);
+		}
+	}
 }
 
 void

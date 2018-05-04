@@ -429,7 +429,7 @@ vrrp_in_chk(vrrp_t * vrrp, vrrp_if *vif, char *buffer, ssize_t buflen_ret, bool 
 	ipv4_phdr_t ipv4_phdr;
 	uint32_t acc_csum = 0;
 	ip = NULL;
-	struct sockaddr_storage *up_addr;
+	ip_address_t *up_addr;
 	size_t buflen, expected_len;
 #ifdef _WITH_UNICAST_CHKSUM_COMPAT_
 	bool chksum_error;
@@ -728,11 +728,11 @@ vrrp_in_chk(vrrp_t * vrrp, vrrp_if *vif, char *buffer, ssize_t buflen_ret, bool 
 				}
 			}
 
-			// check a unicast source address is in the unicast_peer list
+			/* check if a unicast source address is in the unicast_peer list */
 			if (global_data->vrrp_check_unicast_src && !LIST_ISEMPTY(vrrp->unicast_peer)) {
 				for (e = LIST_HEAD(vrrp->unicast_peer); e; ELEMENT_NEXT(e)) {
 					up_addr = ELEMENT_DATA(e);
-					if (((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr.s_addr == ((struct sockaddr_in *)up_addr)->sin_addr.s_addr)
+					if (((struct sockaddr_in *)&vif->pkt_saddr)->sin_addr.s_addr == up_addr->u.sin.sin_addr.s_addr)
 						break;
 				}
 				if (!e) {
@@ -768,11 +768,11 @@ vrrp_in_chk(vrrp_t * vrrp, vrrp_if *vif, char *buffer, ssize_t buflen_ret, bool 
 				}
 			}
 
-			/* check a unicast source address is in the unicast_peer list */
+			/* check if a unicast source address is in the unicast_peer list */
 			if (global_data->vrrp_check_unicast_src && !LIST_ISEMPTY(vrrp->unicast_peer)) {
 				for (e = LIST_HEAD(vrrp->unicast_peer); e; ELEMENT_NEXT(e)) {
 					up_addr = ELEMENT_DATA(e);
-					if (IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)&vif->pkt_saddr)->sin6_addr, &((struct sockaddr_in6 *)up_addr)->sin6_addr))
+					if (IN6_ARE_ADDR_EQUAL(&((struct sockaddr_in6 *)&vif->pkt_saddr)->sin6_addr, &(up_addr->u.sin6_addr)))
 						break;
 				}
 				if (!e) {
@@ -1192,9 +1192,10 @@ vrrp_alloc_send_buffer(vrrp_t * vrrp)
 int
 vrrp_send_adv(vrrp_t * vrrp, uint8_t prio)
 {
-	struct sockaddr_storage *addr;
+	ip_address_t *addr;
 	list l = vrrp->unicast_peer;
 	element e;
+	element ev;
 	vrrp_if *vif;
 	ssize_t ret;
 
@@ -1209,34 +1210,41 @@ log_message(LOG_NOTICE, "Sending VRRP advertisement (prio %d)", prio);
 	/* build the packet */
 	if (!LIST_ISEMPTY(l)) {
 		/* Unicast */
-		if (!LIST_ISEMPTY(vrrp->vrrp_if)) {
-			vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
-
+		for (ev = LIST_HEAD(vrrp->vrrp_if); ev; ELEMENT_NEXT(ev)) {
+			vif = ELEMENT_DATA(ev);
 			for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 				addr = ELEMENT_DATA(e);
 #warning TODO match i/f vs addr
-				vrrp_build_pkt(vrrp, vif, prio, addr);
-				ret = vrrp_send_pkt(vrrp, vif, addr);
-				if (ret < 0) {
-					log_message(LOG_INFO, "VRRP_Instance(%s) Cant send advert to %s (%m)"
-							    , vrrp->iname, inet_sockaddrtos(addr));
+				if (addr->ifp->ifindex && (addr->ifp->ifindex == vif->ifp->ifindex)) {
+					struct sockaddr_storage dst_addr;
+
+					dst_addr.ss_family = addr->ifa.ifa_family;
+					if (dst_addr.ss_family == AF_INET) {
+						((struct sockaddr_in*)&dst_addr)->sin_addr = addr->u.sin.sin_addr;
+					} else {
+						((struct sockaddr_in6*)&dst_addr)->sin6_addr = addr->u.sin6_addr;
+					}
+
+
+					vrrp_build_pkt(vrrp, vif, prio, &dst_addr);
+					ret = vrrp_send_pkt(vrrp, vif, &dst_addr);
+					if (ret < 0) {
+						log_message(LOG_INFO, "VRRP_Instance(%s) Cant send advert to %s (%m)"
+								    , vrrp->iname, inet_sockaddrtos(&dst_addr));
+					}
+				} else {
+					log_message(LOG_INFO, "Skipping unicast address of %s for %s (%d)",
+							addr->ifp->ifname, vif->ifp->ifname, addr->ifp->ifindex);
 				}
 			}
-		} else {
-			log_message(LOG_ERR, "No source address for unicast VRRP");
-			return 1;
 		}
-	} else if (!LIST_ISEMPTY(vrrp->vrrp_if)) {
+	} else {
 		/* Multicast on configured interfaces */
-		l = vrrp->vrrp_if;
-		for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
-			vif = ELEMENT_DATA(e);
+		for (ev = LIST_HEAD(vrrp->vrrp_if); ev; ELEMENT_NEXT(ev)) {
+			vif = ELEMENT_DATA(ev);
 			vrrp_build_pkt(vrrp, vif, prio, NULL);
 			vrrp_send_pkt(vrrp, vif, NULL);
 		}
-	} else {
-		log_message(LOG_ERR, "No interface for mulicast VRRP");
-		return 1;
 	}
 
 	++vrrp->stats->advert_sent;

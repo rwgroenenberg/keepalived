@@ -147,14 +147,6 @@ address_print(FILE *file, void *data)
 		, ipaddr->label ? ipaddr->label : "");
 }
 
-static void
-sockaddr_print(FILE *file, void *data)
-{
-	struct sockaddr_storage *addr = data;
-
-	fprintf(file, "     %s\n", inet_sockaddrtos(addr));
-}
-
 #ifdef _HAVE_FIB_ROUTING_
 static void
 route_print(FILE *file, void *data)
@@ -304,7 +296,7 @@ vrrp_print(FILE *file, void *data)
 	if (!LIST_ISEMPTY(vrrp->unicast_peer)) {
 		fprintf(file, "   Unicast Peer = %d\n",
 			LIST_SIZE(vrrp->unicast_peer));
-		vrrp_print_list(file, vrrp->unicast_peer, &sockaddr_print);
+		vrrp_print_list(file, vrrp->unicast_peer, &address_print);
 #ifdef _WITH_UNICAST_CHKSUM_COMPAT_
 		fprintf(file, "   Unicast checksum compatibility = %s\n",
 				vrrp->unicast_chksum_compat == CHKSUM_COMPATIBILITY_NONE ? "no" :

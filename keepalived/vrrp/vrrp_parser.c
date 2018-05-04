@@ -360,6 +360,10 @@ vrrp_srcip_handler(vector_t *strvec)
 		return;
 	} else {
 		vrrp_if *vif = ELEMENT_DATA(LIST_HEAD(vrrp->vrrp_if));
+		if (LIST_SIZE(vrrp->vrrp_if) > 1) {
+			log_message(LOG_INFO, "Multiple interfaces configured for VRRP instance[%s]. Using first interface [%s] for src address[%s]"
+				            , vrrp->iname, vif->ifp->ifname, FMT_STR_VSLOT(strvec, 1));
+		}
 		saddr = &vif->saddr;
 	}
 
